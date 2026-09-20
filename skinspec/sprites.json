@@ -1,0 +1,291 @@
+{
+  "_comment": "Single source of truth for the classic Winamp 2.x skin format as used by Tokenamp. All rects are [x, y, w, h] in skin pixels, origin top-left, y down. 'sheets' = where sprites live inside each bitmap. 'layout' = where they are placed inside each window.",
+  "sheets": {
+    "main": {
+      "file": "main.bmp", "width": 275, "height": 116, "required": true,
+      "sprites": { "MAIN_WINDOW_BACKGROUND": [0, 0, 275, 116] }
+    },
+    "titlebar": {
+      "file": "titlebar.bmp", "width": 344, "height": 87, "required": true,
+      "sprites": {
+        "MAIN_TITLE_BAR_SELECTED": [27, 0, 275, 14],
+        "MAIN_TITLE_BAR": [27, 15, 275, 14],
+        "MAIN_SHADE_BACKGROUND_SELECTED": [27, 29, 275, 14],
+        "MAIN_SHADE_BACKGROUND": [27, 42, 275, 14],
+        "MAIN_EASTER_EGG_TITLE_BAR_SELECTED": [27, 57, 275, 14],
+        "MAIN_EASTER_EGG_TITLE_BAR": [27, 72, 275, 14],
+        "MAIN_OPTIONS_BUTTON": [0, 0, 9, 9],
+        "MAIN_OPTIONS_BUTTON_DEPRESSED": [0, 9, 9, 9],
+        "MAIN_MINIMIZE_BUTTON": [9, 0, 9, 9],
+        "MAIN_MINIMIZE_BUTTON_DEPRESSED": [9, 9, 9, 9],
+        "MAIN_CLOSE_BUTTON": [18, 0, 9, 9],
+        "MAIN_CLOSE_BUTTON_DEPRESSED": [18, 9, 9, 9],
+        "MAIN_SHADE_BUTTON": [0, 18, 9, 9],
+        "MAIN_SHADE_BUTTON_DEPRESSED": [9, 18, 9, 9],
+        "MAIN_SHADE_BUTTON_SELECTED": [0, 27, 9, 9],
+        "MAIN_SHADE_BUTTON_SELECTED_DEPRESSED": [9, 27, 9, 9],
+        "MAIN_SHADE_POSITION_BACKGROUND": [0, 36, 17, 7],
+        "MAIN_SHADE_POSITION_THUMB_LEFT": [17, 36, 3, 7],
+        "MAIN_SHADE_POSITION_THUMB": [20, 36, 3, 7],
+        "MAIN_SHADE_POSITION_THUMB_RIGHT": [23, 36, 3, 7],
+        "MAIN_CLUTTER_BAR_BACKGROUND": [304, 0, 8, 43],
+        "MAIN_CLUTTER_BAR_BACKGROUND_DISABLED": [312, 0, 8, 43],
+        "MAIN_CLUTTER_BAR_BUTTON_O_SELECTED": [304, 47, 8, 8],
+        "MAIN_CLUTTER_BAR_BUTTON_A_SELECTED": [312, 55, 8, 7],
+        "MAIN_CLUTTER_BAR_BUTTON_I_SELECTED": [320, 62, 8, 7],
+        "MAIN_CLUTTER_BAR_BUTTON_D_SELECTED": [328, 69, 8, 8],
+        "MAIN_CLUTTER_BAR_BUTTON_V_SELECTED": [336, 77, 8, 7]
+      },
+      "notes": "Clutter bar: columns x=304..343 (5 columns of 8px) at y=44..86 each hold a FULL 8x43 clutter bar image with exactly one letter pressed (O,A,I,D,V left to right). The *_SELECTED sprites above are just the pressed letter's sub-rect of those columns."
+    },
+    "cbuttons": {
+      "file": "cbuttons.bmp", "width": 136, "height": 36, "required": true,
+      "sprites": {
+        "MAIN_PREVIOUS_BUTTON": [0, 0, 23, 18],
+        "MAIN_PREVIOUS_BUTTON_ACTIVE": [0, 18, 23, 18],
+        "MAIN_PLAY_BUTTON": [23, 0, 23, 18],
+        "MAIN_PLAY_BUTTON_ACTIVE": [23, 18, 23, 18],
+        "MAIN_PAUSE_BUTTON": [46, 0, 23, 18],
+        "MAIN_PAUSE_BUTTON_ACTIVE": [46, 18, 23, 18],
+        "MAIN_STOP_BUTTON": [69, 0, 23, 18],
+        "MAIN_STOP_BUTTON_ACTIVE": [69, 18, 23, 18],
+        "MAIN_NEXT_BUTTON": [92, 0, 22, 18],
+        "MAIN_NEXT_BUTTON_ACTIVE": [92, 18, 22, 18],
+        "MAIN_EJECT_BUTTON": [114, 0, 22, 16],
+        "MAIN_EJECT_BUTTON_ACTIVE": [114, 16, 22, 16]
+      }
+    },
+    "shufrep": {
+      "file": "shufrep.bmp", "width": 92, "height": 85, "required": true,
+      "sprites": {
+        "MAIN_REPEAT_BUTTON": [0, 0, 28, 15],
+        "MAIN_REPEAT_BUTTON_DEPRESSED": [0, 15, 28, 15],
+        "MAIN_REPEAT_BUTTON_SELECTED": [0, 30, 28, 15],
+        "MAIN_REPEAT_BUTTON_SELECTED_DEPRESSED": [0, 45, 28, 15],
+        "MAIN_SHUFFLE_BUTTON": [28, 0, 47, 15],
+        "MAIN_SHUFFLE_BUTTON_DEPRESSED": [28, 15, 47, 15],
+        "MAIN_SHUFFLE_BUTTON_SELECTED": [28, 30, 47, 15],
+        "MAIN_SHUFFLE_BUTTON_SELECTED_DEPRESSED": [28, 45, 47, 15],
+        "MAIN_EQ_BUTTON": [0, 61, 23, 12],
+        "MAIN_EQ_BUTTON_SELECTED": [0, 73, 23, 12],
+        "MAIN_EQ_BUTTON_DEPRESSED": [46, 61, 23, 12],
+        "MAIN_EQ_BUTTON_DEPRESSED_SELECTED": [46, 73, 23, 12],
+        "MAIN_PLAYLIST_BUTTON": [23, 61, 23, 12],
+        "MAIN_PLAYLIST_BUTTON_SELECTED": [23, 73, 23, 12],
+        "MAIN_PLAYLIST_BUTTON_DEPRESSED": [69, 61, 23, 12],
+        "MAIN_PLAYLIST_BUTTON_DEPRESSED_SELECTED": [69, 73, 23, 12]
+      }
+    },
+    "posbar": {
+      "file": "posbar.bmp", "width": 307, "height": 10, "required": true,
+      "sprites": {
+        "MAIN_POSITION_SLIDER_BACKGROUND": [0, 0, 248, 10],
+        "MAIN_POSITION_SLIDER_THUMB": [248, 0, 29, 10],
+        "MAIN_POSITION_SLIDER_THUMB_SELECTED": [278, 0, 29, 10]
+      }
+    },
+    "volume": {
+      "file": "volume.bmp", "width": 68, "height": 433, "required": true,
+      "frames": { "count": 28, "x": 0, "y0": 0, "strideY": 15, "w": 68, "h": 13 },
+      "sprites": {
+        "MAIN_VOLUME_THUMB_SELECTED": [0, 422, 14, 11],
+        "MAIN_VOLUME_THUMB": [15, 422, 14, 11]
+      },
+      "notes": "Frame i (0..27) is at [0, 15*i, 68, 13]. Frame 0 = empty/cool, frame 27 = full/hot."
+    },
+    "balance": {
+      "file": "balance.bmp", "width": 68, "height": 433, "required": true,
+      "frames": { "count": 28, "x": 9, "y0": 0, "strideY": 15, "w": 38, "h": 13 },
+      "sprites": {
+        "MAIN_BALANCE_THUMB_SELECTED": [0, 422, 14, 11],
+        "MAIN_BALANCE_THUMB": [15, 422, 14, 11]
+      },
+      "notes": "Frame i (0..27) is at [9, 15*i, 38, 13]. Third-party skins may ship a 47px wide sheet; only x=9..46 is read. If balance.bmp is missing, fall back to volume.bmp using the same rects."
+    },
+    "monoster": {
+      "file": "monoster.bmp", "width": 58, "height": 24, "required": true,
+      "sprites": {
+        "MAIN_STEREO_SELECTED": [0, 0, 29, 12],
+        "MAIN_STEREO": [0, 12, 29, 12],
+        "MAIN_MONO_SELECTED": [29, 0, 27, 12],
+        "MAIN_MONO": [29, 12, 27, 12]
+      }
+    },
+    "playpaus": {
+      "file": "playpaus.bmp", "width": 42, "height": 9, "required": true,
+      "sprites": {
+        "MAIN_PLAYING_INDICATOR": [0, 0, 9, 9],
+        "MAIN_PAUSED_INDICATOR": [9, 0, 9, 9],
+        "MAIN_STOPPED_INDICATOR": [18, 0, 9, 9],
+        "MAIN_NOT_WORKING_INDICATOR": [36, 0, 3, 9],
+        "MAIN_WORKING_INDICATOR": [39, 0, 3, 9]
+      }
+    },
+    "numbers": {
+      "file": "numbers.bmp", "width": 99, "height": 13, "required": false,
+      "sprites": {
+        "DIGIT_0": [0, 0, 9, 13], "DIGIT_1": [9, 0, 9, 13], "DIGIT_2": [18, 0, 9, 13],
+        "DIGIT_3": [27, 0, 9, 13], "DIGIT_4": [36, 0, 9, 13], "DIGIT_5": [45, 0, 9, 13],
+        "DIGIT_6": [54, 0, 9, 13], "DIGIT_7": [63, 0, 9, 13], "DIGIT_8": [72, 0, 9, 13],
+        "DIGIT_9": [81, 0, 9, 13], "DIGIT_BLANK": [90, 0, 9, 13],
+        "NO_MINUS_SIGN": [9, 6, 5, 1], "MINUS_SIGN": [20, 6, 5, 1]
+      },
+      "notes": "Legacy sheet. Minus sign is a 5x1 strip placed at window (40,32)."
+    },
+    "nums_ex": {
+      "file": "nums_ex.bmp", "width": 108, "height": 13, "required": false,
+      "sprites": {
+        "DIGIT_0": [0, 0, 9, 13], "DIGIT_1": [9, 0, 9, 13], "DIGIT_2": [18, 0, 9, 13],
+        "DIGIT_3": [27, 0, 9, 13], "DIGIT_4": [36, 0, 9, 13], "DIGIT_5": [45, 0, 9, 13],
+        "DIGIT_6": [54, 0, 9, 13], "DIGIT_7": [63, 0, 9, 13], "DIGIT_8": [72, 0, 9, 13],
+        "DIGIT_9": [81, 0, 9, 13], "DIGIT_BLANK": [90, 0, 9, 13], "DIGIT_MINUS": [99, 0, 9, 13]
+      },
+      "notes": "Preferred when present. One of numbers.bmp / nums_ex.bmp must exist. Tokenamp's own skins ship BOTH."
+    },
+    "text": {
+      "file": "text.bmp", "width": 155, "height": 74, "required": true,
+      "notes": "Bitmap font, 5x6 glyph cells, 31 columns. Glyph for [row, col] is at [col*5, row*6, 5, 6]. See 'font'."
+    },
+    "eqmain": {
+      "file": "eqmain.bmp", "width": 275, "height": 315, "required": false,
+      "frames": { "count": 28, "x0": 13, "y0": 164, "strideX": 15, "strideY": 65, "perRow": 14, "w": 14, "h": 63 },
+      "sprites": {
+        "EQ_WINDOW_BACKGROUND": [0, 0, 275, 116],
+        "EQ_TITLE_BAR_SELECTED": [0, 134, 275, 14],
+        "EQ_TITLE_BAR": [0, 149, 275, 14],
+        "EQ_CLOSE_BUTTON": [0, 116, 9, 9],
+        "EQ_CLOSE_BUTTON_ACTIVE": [0, 125, 9, 9],
+        "EQ_ON_BUTTON": [10, 119, 26, 12],
+        "EQ_ON_BUTTON_DEPRESSED": [128, 119, 26, 12],
+        "EQ_ON_BUTTON_SELECTED": [69, 119, 26, 12],
+        "EQ_ON_BUTTON_SELECTED_DEPRESSED": [187, 119, 26, 12],
+        "EQ_AUTO_BUTTON": [36, 119, 32, 12],
+        "EQ_AUTO_BUTTON_DEPRESSED": [154, 119, 32, 12],
+        "EQ_AUTO_BUTTON_SELECTED": [95, 119, 32, 12],
+        "EQ_AUTO_BUTTON_SELECTED_DEPRESSED": [213, 119, 32, 12],
+        "EQ_SLIDER_THUMB": [0, 164, 11, 11],
+        "EQ_SLIDER_THUMB_SELECTED": [0, 176, 11, 11],
+        "EQ_PRESETS_BUTTON": [224, 164, 44, 12],
+        "EQ_PRESETS_BUTTON_SELECTED": [224, 176, 44, 12],
+        "EQ_GRAPH_BACKGROUND": [0, 294, 113, 19],
+        "EQ_GRAPH_LINE_COLORS": [115, 294, 1, 19],
+        "EQ_PREAMP_LINE": [0, 314, 113, 1]
+      },
+      "notes": "Slider background frame i (0..27): col=i%14,row=i/14 -> [13+15*col, 164+65*row, 14, 63]. Frame 0 = slider at bottom (min), frame 27 = slider at top (max). If eqmain.bmp is missing the EQ window falls back to the built-in base skin's sheet."
+    },
+    "pledit": {
+      "file": "pledit.bmp", "width": 280, "height": 186, "required": false,
+      "sprites": {
+        "PLAYLIST_TOP_LEFT_SELECTED": [0, 0, 25, 20],
+        "PLAYLIST_TITLE_BAR_SELECTED": [26, 0, 100, 20],
+        "PLAYLIST_TOP_TILE_SELECTED": [127, 0, 25, 20],
+        "PLAYLIST_TOP_RIGHT_CORNER_SELECTED": [153, 0, 25, 20],
+        "PLAYLIST_TOP_LEFT_CORNER": [0, 21, 25, 20],
+        "PLAYLIST_TITLE_BAR": [26, 21, 100, 20],
+        "PLAYLIST_TOP_TILE": [127, 21, 25, 20],
+        "PLAYLIST_TOP_RIGHT_CORNER": [153, 21, 25, 20],
+        "PLAYLIST_LEFT_TILE": [0, 42, 12, 29],
+        "PLAYLIST_RIGHT_TILE": [31, 42, 20, 29],
+        "PLAYLIST_BOTTOM_TILE": [179, 0, 25, 38],
+        "PLAYLIST_BOTTOM_LEFT_CORNER": [0, 72, 125, 38],
+        "PLAYLIST_BOTTOM_RIGHT_CORNER": [126, 72, 150, 38],
+        "PLAYLIST_VISUALIZER_BACKGROUND": [205, 0, 75, 38],
+        "PLAYLIST_SCROLL_HANDLE": [52, 53, 8, 18],
+        "PLAYLIST_SCROLL_HANDLE_SELECTED": [61, 53, 8, 18],
+        "PLAYLIST_CLOSE_SELECTED": [52, 42, 9, 9],
+        "PLAYLIST_COLLAPSE_SELECTED": [62, 42, 9, 9]
+      },
+      "notes": "Close button hit zone in the top-right corner piece: window (W-11, 3, 9, 9); its normal state is baked into PLAYLIST_TOP_RIGHT_CORNER. If pledit.bmp is missing fall back to the built-in base skin's sheet."
+    }
+  },
+  "textFiles": {
+    "viscolor.txt": "24 lines 'r,g,b' (anything after the 3 ints is a comment). 0=viz background, 1=background dots, 2..17=spectrum bar colours from TOP (2) to BOTTOM (17), 18..22=oscilloscope colours (18 = brightest/centre), 23=spectrum peak caps.",
+    "pledit.txt": "INI: [Text] Normal=#RRGGBB Current=#RRGGBB NormalBG=#RRGGBB SelectedBG=#RRGGBB Font=Arial. Keys are case-insensitive; '#' optional.",
+    "region.txt": "Optional INI with [Normal]/[WindowShade]/[Equalizer]/[EqualizerWS] sections: NumPoints=a,b,.. and PointList=x,y, x,y ... defining polygons (union) of the visible window shape."
+  },
+  "font": {
+    "glyphWidth": 5, "glyphHeight": 6, "columns": 31,
+    "rows": [
+      "ABCDEFGHIJKLMNOPQRSTUVWXYZ\"@",
+      "0123456789….:()-'!_+\\/[]^&%,=$#",
+      "ÅÖÄ?*"
+    ],
+    "space": [0, 30],
+    "notes": "rows[r][c] is the character whose glyph sits at cell [r, c]. Row 0 cells 28,29 are unused/blank; the space glyph is cell [0,30]. Lowercase maps to uppercase. Any unmapped character renders as space. Tokenamp only ever emits characters from this set."
+  },
+  "layout": {
+    "main": {
+      "size": [275, 116],
+      "titleBar": [0, 0, 275, 14],
+      "optionsButton": [6, 3, 9, 9],
+      "minimizeButton": [244, 3, 9, 9],
+      "shadeButton": [254, 3, 9, 9],
+      "closeButton": [264, 3, 9, 9],
+      "clutterBar": [10, 22, 8, 43],
+      "clutterButtons": { "O": [10, 25, 8, 8], "A": [10, 33, 8, 7], "I": [10, 40, 8, 7], "D": [10, 47, 8, 8], "V": [10, 55, 8, 7] },
+      "workIndicator": [24, 28, 3, 9],
+      "playPauseIndicator": [26, 28, 9, 9],
+      "minusSignLegacy": [40, 32, 5, 1],
+      "minusSignEx": [38, 26, 9, 13],
+      "digits": [[48, 26, 9, 13], [60, 26, 9, 13], [78, 26, 9, 13], [90, 26, 9, 13]],
+      "timeClickZone": [36, 26, 63, 13],
+      "visualizer": [24, 43, 76, 16],
+      "marquee": [111, 27, 154, 6],
+      "kbps": [111, 43, 15, 6],
+      "khz": [156, 43, 10, 6],
+      "mono": [212, 41, 27, 12],
+      "stereo": [239, 41, 29, 12],
+      "volume": [107, 57, 68, 13],
+      "volumeThumbY": 58, "volumeThumbTravel": [107, 158],
+      "balance": [177, 57, 38, 13],
+      "balanceThumbY": 58, "balanceThumbTravel": [177, 201],
+      "eqButton": [219, 58, 23, 12],
+      "plButton": [242, 58, 23, 12],
+      "posbar": [16, 72, 248, 10],
+      "posbarThumbTravel": [16, 235],
+      "previous": [16, 88, 23, 18],
+      "play": [39, 88, 23, 18],
+      "pause": [62, 88, 23, 18],
+      "stop": [85, 88, 23, 18],
+      "next": [108, 88, 22, 18],
+      "eject": [136, 89, 22, 16],
+      "shuffle": [164, 89, 47, 15],
+      "repeat": [210, 89, 28, 15],
+      "aboutLogo": [253, 91, 13, 15]
+    },
+    "shade": {
+      "size": [275, 14],
+      "optionsButton": [6, 3, 9, 9],
+      "minimizeButton": [244, 3, 9, 9],
+      "shadeButton": [254, 3, 9, 9],
+      "closeButton": [264, 3, 9, 9],
+      "miniVisualizer": [79, 5, 38, 5],
+      "timeGlyphs": [[130, 4], [135, 4], [142, 4], [147, 4]],
+      "previous": [169, 4, 8, 7], "play": [177, 4, 10, 7], "pause": [187, 4, 10, 7],
+      "stop": [197, 4, 9, 7], "next": [206, 4, 10, 7], "eject": [216, 4, 9, 7],
+      "position": [226, 4, 17, 7],
+      "positionThumbTravel": [226, 240]
+    },
+    "eq": {
+      "size": [275, 116],
+      "titleBar": [0, 0, 275, 14],
+      "closeButton": [264, 3, 9, 9],
+      "onButton": [14, 18, 26, 12],
+      "autoButton": [40, 18, 32, 12],
+      "presetsButton": [217, 18, 44, 12],
+      "graph": [86, 17, 113, 19],
+      "preampSlider": [21, 38, 14, 63],
+      "bandSliders": { "x0": 78, "strideX": 18, "y": 38, "w": 14, "h": 63, "count": 10 },
+      "sliderThumbOffsetX": 1, "sliderThumbTravelY": [0, 51]
+    },
+    "playlist": {
+      "minSize": [275, 116], "defaultSize": [275, 232], "resizeStep": [25, 29],
+      "titleHeight": 20, "bottomHeight": 38, "leftWidth": 12, "rightWidth": 20,
+      "closeButtonFromTopRight": [-11, 3, 9, 9],
+      "rowHeight": 13,
+      "scrollHandleFromRight": -15,
+      "runningInfoFromBottomRight": [-143, -28],
+      "miniTimeFromBottomRight": [-87, -15]
+    }
+  }
+}
