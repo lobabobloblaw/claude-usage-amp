@@ -395,4 +395,7 @@ the widgets mean *here* (third-party skins will still say "kbps"; that is part o
 | EQ scale captions | +12 db / 0 / -12 db | `MAX` / `MID` / `0` |
 | playlist title piece (100×20) | WINAMP PLAYLIST | `SESSIONS` |
 
-Three art skins ship in addition to Base. Their art direction lives in each skin's own brief.
+Four art skins ship in addition to Base: **Bulkhead** (amber CRT in worn gunmetal), **Walnut 76**
+(teal glass, walnut and champagne aluminium), **Amethyst** (purple-and-gold circuit board) and
+**Bookcloth** (an Anthropic-centric, fan-made tribute: clay-orange book cloth, ivory paper, slate
+letterpress ink — the one light skin). Their art direction lives in each skin's own `BRIEF.md`.
