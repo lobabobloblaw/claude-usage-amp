@@ -50,9 +50,16 @@ def load_theme(folder: Path):
     return mod.THEME
 
 
+#: Folders that hold a ``theme.py`` but are not skins.  ``skinkit`` is the
+#: toolkit package itself -- its ``theme.py`` defines the Theme base class, not
+#: a THEME instance, so ``--all`` must not try to build it.
+NOT_SKINS = {"skinkit", "dist"}
+
+
 def skin_folders() -> list[Path]:
     return sorted(p for p in SKINS.iterdir()
-                  if p.is_dir() and (p / "theme.py").is_file())
+                  if p.is_dir() and p.name not in NOT_SKINS
+                  and (p / "theme.py").is_file())
 
 
 def build_one(folder: Path, do_preview: bool = True, do_validate: bool = True) -> bool:

@@ -37,6 +37,10 @@ from .spec import Rect
 
 __all__ = ["build_skin", "BuildResult", "skins_root", "dist_dir"]
 
+#: Fixed timestamp stamped on every entry of a built ``.wsz``, so the archive
+#: is reproducible.  Winamp 2.6 shipped in June 1999.
+WSZ_TIMESTAMP = (1999, 6, 1, 0, 0, 0)
+
 
 def skins_root() -> Path:
     """The ``skins/`` directory (the parent of this package)."""
@@ -650,10 +654,17 @@ def build_skin(theme, out_dir, dist: Path | None = None, quiet: bool = False) ->
 
     dist_path = Path(dist) if dist is not None else dist_dir()
     dist_path.mkdir(parents=True, exist_ok=True)
-    wsz = dist_path / f"{theme.name}.wsz"
+    wsz = dist_path / f"{getattr(theme, 'dist_name', None) or theme.name}.wsz"
     with zipfile.ZipFile(wsz, "w", compression=zipfile.ZIP_DEFLATED) as z:
         for p in files:
-            z.write(p, arcname=p.name)   # FLAT: basename only, no directory prefix
+            # FLAT: basename only, no directory prefix.  The entry is stamped
+            # with a fixed date rather than the file's mtime so a .wsz is a
+            # pure function of the art -- rebuilding unchanged art produces a
+            # byte-identical archive and leaves the tracked binary alone.
+            info = zipfile.ZipInfo(p.name, date_time=WSZ_TIMESTAMP)
+            info.compress_type = zipfile.ZIP_DEFLATED
+            info.external_attr = 0o644 << 16
+            z.writestr(info, p.read_bytes())
     if not quiet:
         print(f"  built {len(files)} files -> {loose}")
         print(f"  packed {wsz}")

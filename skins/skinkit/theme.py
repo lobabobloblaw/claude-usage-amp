@@ -36,6 +36,11 @@ class Theme:
     # identity
     # ------------------------------------------------------------------
     name = "Base"
+    #: Basename of the built ``.wsz``, when it should differ from :attr:`name`
+    #: -- set it for a skin whose display name has spaces or punctuation
+    #: (``name = "Walnut 76"`` with ``dist_name = "Walnut76"``).  ``None``
+    #: means the archive is named after :attr:`name`.
+    dist_name = None
     author = "Tokenamp"
     description = "Dark graphite hi-fi faceplate with a green phosphor display."
     seed = 11
