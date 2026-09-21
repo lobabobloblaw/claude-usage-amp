@@ -15,7 +15,13 @@ enum LiveFetchOutcome {
 /// a network (SPEC 4.3: honour `Retry-After`, else exponential backoff to 15 min).
 enum LivePollPolicy {
 
+    /// Ceiling of our own exponential backoff (429 without `Retry-After`, network/HTTP failures).
     static let maxBackoff: TimeInterval = 900
+    /// Longest `Retry-After` honoured. The server may legitimately ask for more than our own
+    /// backoff ceiling; a value beyond this is treated as this.
+    static let maxRetryAfter: TimeInterval = 6 * 3600
+    /// No two polls closer together than this, `refreshNow()` and post-reset polls included.
+    static let minSpacing: TimeInterval = 10
 
     static func schedule(outcome: LiveFetchOutcome, now: Date,
                          previousBackoff: TimeInterval) -> (nextAllowedAt: Date, backoff: TimeInterval) {
@@ -26,12 +32,66 @@ enum LivePollPolicy {
             return (.distantPast, 0)
         case .rateLimited(let retryAt):
             let grown = min(maxBackoff, max(60, previousBackoff * 2))
-            if let retryAt { return (retryAt, grown) }
+            if let retryAt { return (min(retryAt, now.addingTimeInterval(maxRetryAfter)), grown) }
             return (now.addingTimeInterval(grown), grown)
         case .failure:
             let grown = min(maxBackoff, max(30, previousBackoff * 2))
             return (now.addingTimeInterval(grown), grown)
         }
+    }
+
+    /// Whether a poll may start now.
+    ///
+    /// - `force` (`refreshNow()`, start-up, re-enabling): at most one per `minSpacing`, and never
+    ///   inside a server-requested 429 wait. Our own backoff is overridden.
+    /// - Otherwise the normal cadence: `interval` while there was local activity in the last
+    ///   5 min, else 300 s — or sooner once `resetPollAt` (set just after a limit reset) is due.
+    ///   Either way `nextAllowedAt` (429 `Retry-After` or backoff) is respected.
+    static func shouldPoll(force: Bool, now: Date, lastPollAt: Date, nextAllowedAt: Date,
+                           rateLimited: Bool, recentActivity: Bool, interval: TimeInterval,
+                           resetPollAt: Date?, minSpacing: TimeInterval = LivePollPolicy.minSpacing) -> Bool {
+        let sinceLast = now.timeIntervalSince(lastPollAt)
+        guard sinceLast >= minSpacing else { return false }
+        if force { return !(rateLimited && now < nextAllowedAt) }
+        guard now >= nextAllowedAt else { return false }
+        if let resetPollAt, now >= resetPollAt { return true }
+        let cadence = recentActivity ? min(900, max(30, interval)) : 300
+        return sinceLast >= cadence
+    }
+
+    /// Delay between a limit reset being noticed and the poll that fetches the new window: a few
+    /// seconds, so the service has rolled over, jittered so many clients do not poll in lockstep.
+    static func resetPollDelay(unit: Double = Double.random(in: 0...1)) -> TimeInterval {
+        2 + 4 * min(1, max(0, unit))
+    }
+}
+
+/// What a limit looks like once its reset time has passed and no fresher reading has arrived.
+enum LimitRollover {
+
+    /// A limit whose `resetsAt` is not in the future is a new, empty window: it is published at
+    /// 0 % (severity `normal`) with `resetsAt` moved forward by whole windows until it is in the
+    /// future. Without a known window the reset time becomes unknown. Limits still inside their
+    /// window are returned unchanged. `rolled` is true when anything changed.
+    static func roll(_ gauges: [LimitGauge], now: Date) -> (gauges: [LimitGauge], rolled: Bool) {
+        var rolled = false
+        let out = gauges.map { g -> LimitGauge in
+            guard let resetsAt = g.resetsAt, resetsAt <= now else { return g }
+            rolled = true
+            var next = g
+            next.percent = 0
+            next.severity = "normal"
+            if let window = g.windowSeconds, window.isFinite, window > 0 {
+                let windows = ((now.timeIntervalSince(resetsAt)) / window).rounded(.down) + 1
+                next.resetsAt = resetsAt.addingTimeInterval(windows * window)
+                // Floating point at the boundary: never publish a reset that is already due.
+                if let r = next.resetsAt, r <= now { next.resetsAt = r.addingTimeInterval(window) }
+            } else {
+                next.resetsAt = nil
+            }
+            return next
+        }
+        return (out, rolled)
     }
 }
 
@@ -186,26 +246,57 @@ final class LimitsClient {
                 completion(.failure("no response"))
                 return
             }
-            switch http.statusCode {
-            case 200:
-                guard let data, let root = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any] else {
-                    completion(.failure("bad json"))
-                    return
-                }
-                completion(.success(planName: planName, limits: LimitsClient.parseLimits(root)))
-            case 401, 403:
-                completion(.authExpired)
-            case 429:
-                // Only a usable `Retry-After` produces a date; otherwise the caller backs off.
-                let retry = http.value(forHTTPHeaderField: "Retry-After")
-                    .flatMap(Double.init)
-                    .map { min(max($0, 1), LivePollPolicy.maxBackoff) }
-                completion(.rateLimited(retryAt: retry.map { Date().addingTimeInterval($0) }))
-            default:
-                completion(.failure("http \(http.statusCode)"))
-            }
+            completion(LimitsClient.outcome(status: http.statusCode, body: data,
+                                            retryAfterHeader: http.value(forHTTPHeaderField: "Retry-After"),
+                                            planName: planName, now: Date()))
         }.resume()
     }
+
+    /// What one HTTP response means. Pure, so the status mapping is testable without a network.
+    static func outcome(status: Int, body: Data?, retryAfterHeader: String?, planName: String, now: Date) -> LiveFetchOutcome {
+        switch status {
+        case 200:
+            guard let body, let root = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] else {
+                return .failure("bad json")
+            }
+            return .success(planName: planName, limits: parseLimits(root))
+        case 401:
+            return .authExpired
+        case 403:
+            // Forbidden is not an expired token (that is 401, and Claude Code fixes it by itself):
+            // it does not go away on its own, so it is reported as an error and backs off like one,
+            // instead of reading "auth expired" for ever while being retried every minute.
+            return .failure("http 403 forbidden")
+        case 429:
+            // Only a usable `Retry-After` produces a date; otherwise the caller backs off.
+            return .rateLimited(retryAt: retryAfter(retryAfterHeader, now: now))
+        default:
+            return .failure("http \(status)")
+        }
+    }
+
+    /// `Retry-After` as a date: delta-seconds (`120`) or an HTTP-date (`Wed, 21 Oct 2026 07:28:00
+    /// GMT`), clamped to 1 s … `LivePollPolicy.maxRetryAfter` from `now`. nil when absent or unusable.
+    static func retryAfter(_ value: String?, now: Date) -> Date? {
+        guard let raw = value?.trimmingCharacters(in: .whitespaces), !raw.isEmpty else { return nil }
+        var seconds: TimeInterval?
+        if let d = Double(raw), d.isFinite {
+            seconds = d
+        } else if let date = httpDateFormatter.date(from: raw) {
+            seconds = date.timeIntervalSince(now)
+        }
+        guard let s = seconds else { return nil }
+        return now.addingTimeInterval(min(max(s, 1), LivePollPolicy.maxRetryAfter))
+    }
+
+    /// IMF-fixdate (RFC 9110), the only HTTP-date form a current server sends.
+    private static let httpDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.timeZone = TimeZone(identifier: "GMT")
+        f.dateFormat = "EEE, dd MMM yyyy HH:mm:ss 'GMT'"
+        return f
+    }()
 
     private static func shortError(_ error: Error) -> String {
         let ns = error as NSError

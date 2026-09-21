@@ -201,6 +201,7 @@ func printTable(_ s: UsageSnapshot, _ d: ScanDiagnostics, coldSeconds: Double, f
         + String(format: ", last pass %.2fs = %.0f MB/s", d.lastFullScanSeconds, d.throughputMBPerSecond))
     print("events   \(d.rawEvents) raw / \(d.uniqueEvents) unique, "
         + "\(d.linesPrefiltered) lines passed the byte prefilter, \(d.linesParsed) JSON-parsed")
+    print("         \(d.fastEvents) fast-mode, \(d.sharedEvents) carried by more than one transcript")
     print("timing   " + String(format: "complete in %.2fs", coldSeconds)
         + (firstDataSeconds.map { String(format: ", today's data first shown at %.2fs", $0) } ?? "")
         + (d.loadedFromCache ? String(format: ", warm cache load %.3fs", d.cacheLoadSeconds) : ", cold (no cache)")

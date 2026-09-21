@@ -28,9 +28,22 @@ public enum SelfTest {
         rescanAfterPartialLine(&runner)
         shrinkingFile(&runner)
         attributionDeterminism(&runner)
+        ownershipRule(&runner)
+        evictionOfCopies(&runner)
+        fastMode(&runner)
+        liveHTTP(&runner)
+        limitRollover(&runner)
+        timeZoneChange(&runner)
         parallelScan(&runner)
         providerLifecycle(&runner)
+        providerLiveReset(&runner)
 
+        removeTempDirs()
+        runner.checks += 1                      // the sweep itself is checked in `removeTempDirs`
+        if !leftoverTempDirs().isEmpty {
+            runner.failures += 1
+            print("  FAIL [temp dirs] this run's fixture folders are still in the temporary directory")
+        }
         runner.summary()
         return runner.failures == 0
     }
@@ -250,6 +263,25 @@ public enum SelfTest {
         let f = ISO8601.epochSeconds("2026-09-20T18:57:11.000-0200")
         r.close(f ?? 0, 1_789_937_831, 1e-6, "offset without colon")
 
+        // Short offsets at the very end of the text used to make the digit reader run past the
+        // buffer (a trap in a debug build). `+05` is a whole-hour offset; `+0` is malformed.
+        let g = ISO8601.epochSeconds("2026-09-21T06:50:00+05")
+        r.close(g ?? 0, ISO8601.epochSeconds("2026-09-21T01:50:00Z") ?? -1, 1e-6, "+HH offset without minutes")
+        r.close(ISO8601.epochSeconds("2026-09-21T06:50:00.5-05") ?? 0,
+                (ISO8601.epochSeconds("2026-09-21T11:50:00Z") ?? -1) + 0.5, 1e-6, "-HH offset after a fraction")
+        r.expect(ISO8601.epochSeconds("2026-09-21T01:50:00+0") == nil, "a one-digit offset is rejected, not read past the end")
+        r.expect(ISO8601.epochSeconds("2026-09-21T01:50:00+") == nil, "a bare sign is rejected")
+        r.close(ISO8601.epochSeconds("2026-09-21T06:50:00+05:") ?? 0, ISO8601.epochSeconds("2026-09-21T01:50:00Z") ?? -1, 1e-6,
+                "a dangling colon after the hour is tolerated")
+        r.close(ISO8601.epochSeconds("2026-09-21T06:20:00+05:3") ?? 0, ISO8601.epochSeconds("2026-09-21T01:20:00Z") ?? -1, 1e-6,
+                "a one-digit minute part is ignored rather than read past the end")
+        // Every prefix of a valid timestamp must be safe to hand in (the scanner sees cut lines).
+        let full = Array("2026-09-21T01:50:00.324734+05:30".utf8)
+        for k in 0...full.count {
+            _ = Array(full.prefix(k)).withUnsafeBytes { ISO8601.epochSeconds($0) }
+        }
+        r.checks += 1                           // reaching this line is the check
+
         r.expect(ISO8601.epochSeconds("not a timestamp") == nil, "garbage rejected")
         r.expect(ISO8601.epochSeconds("") == nil, "empty rejected")
 
@@ -272,7 +304,7 @@ public enum SelfTest {
         for out in [128, 512, 1337] {
             var next = makeEvent(id: "msg_1", ts: 1002, model: "claude-opus-5", input: 12, output: out, writeTotal: 900, write1h: 100, read: 5000)
             next.sessionID = "other-session"
-            merged.merge(next)
+            merged.mergeWithinFile(next)
         }
         r.equal(merged.output, 1337, "last/max output_tokens wins")
         r.equal(merged.input, 12, "input unchanged")
@@ -724,6 +756,7 @@ public enum SelfTest {
             makeEvent(id: "c1", ts: 1_789_940_000.125, model: "claude-opus-5", input: 1, output: 2, writeTotal: 3, write1h: 1, read: 4),
             makeEvent(id: "c2", ts: 1_789_940_100.5, model: "claude-fable-5-1", input: 10, output: 20, writeTotal: 30, write1h: 0, read: 40),
         ]
+        f.events[0].fast = true
         let data = ScanCache.encode(files: [f.path: f])
         r.expect((try? JSONSerialization.jsonObject(with: data)) != nil, "cache file is valid JSON")
         guard let back = ScanCache.decode(data), let g = back[f.path] else {
@@ -739,6 +772,7 @@ public enum SelfTest {
         r.equal(g.events[1].model, "claude-fable-5-1", "event model")
         r.equal(g.events[0].cacheWrite1h, 1, "1h split survives")
         r.equal(g.events[1].cacheRead, 40, "cache read survives")
+        r.expect(g.events[0].fast && !g.events[1].fast, "the fast-mode flag survives")
 
         // Strings with escapes and non-ASCII survive the hand-rolled reader.
         var odd = ScannedFile(path: "/tmp/tab\tnew\nline/ünïcode \"q\"/z.jsonl", sessionID: "s")
@@ -751,9 +785,9 @@ public enum SelfTest {
 
         // Whitespace and unknown keys (a cache written by a newer build) are tolerated.
         let padded = Data("""
-        { "v" : 1 , "extra" : {"a":[1,2,{"b":null}]} , "strings" : [ "sess" , "claude-opus-5" , "/tmp" ] ,
+        { "v" : \(ScanCache.version) , "extra" : {"a":[1,2,{"b":null}]} , "strings" : [ "sess" , "claude-opus-5" , "/tmp" ] ,
           "files" : [ { "p" : "/tmp/x.jsonl" , "sz" : 10 , "mt" : 1.5 , "in" : 2 , "of" : 10 , "newkey" : true ,
-                        "e" : [ [ 1500 , 0 , 1 , 2 , 1 , 2 , 3 , 0 , 4 , "m1" ] ] } ] }
+                        "e" : [ [ 1500 , 0 , 1 , 2 , 1 , 2 , 3 , 0 , 4 , 1 , "m1" ] ] } ] }
         """.utf8)
         guard let tolerant = ScanCache.decode(padded)?["/tmp/x.jsonl"] else {
             r.expect(false, "tolerant decode"); return
@@ -763,11 +797,20 @@ public enum SelfTest {
         r.close(tolerant.events[0].timestamp, 1.5, 1e-9, "millisecond timestamp")
         r.equal(tolerant.events[0].model, "claude-opus-5", "interned model resolved")
         r.equal(tolerant.events[0].cwd, "/tmp", "interned cwd resolved")
+        r.expect(tolerant.events[0].fast, "fast flag decoded")
 
         // A corrupt or differently versioned file is ignored rather than trusted.
         r.expect(ScanCache.decode(Data("{".utf8)) == nil, "truncated cache rejected")
         r.expect(ScanCache.decode(Data("{\"v\":999,\"strings\":[],\"files\":[]}".utf8)) == nil, "wrong version rejected")
-        r.expect(ScanCache.decode(Data("{\"v\":1,\"strings\":[],\"files\":[{\"p\":\"/a\",\"e\":[[1,2]]}]}".utf8)) == nil, "short event row rejected")
+        r.expect(ScanCache.decode(Data("{\"v\":\(ScanCache.version),\"strings\":[],\"files\":[{\"p\":\"/a\",\"e\":[[1,2]]}]}".utf8)) == nil, "short event row rejected")
+        // A version 1 cache (rows without the fast flag) cannot say which events were fast: it is
+        // discarded as a whole, and the scanner falls back to one cold scan.
+        r.equal(ScanCache.version, 2, "cache format version")
+        r.expect(ScanCache.decode(Data("{\"v\":1,\"strings\":[\"s\"],\"files\":[{\"p\":\"/a\",\"sz\":1,\"mt\":1,\"in\":1,\"of\":1,\"e\":[[1500,0,0,0,1,2,3,0,4,\"m\"]]}]}".utf8)) == nil,
+                 "a version 1 cache is discarded")
+        r.expect(ScanCache.decode(Data("{\"v\":2,\"strings\":[\"s\"],\"files\":[{\"p\":\"/a\",\"sz\":1,\"mt\":1,\"in\":1,\"of\":1,\"e\":[[1500,0,0,0,1,2,3,0,4,7,\"m\"]]}]}".utf8)) == nil,
+                 "a fast flag other than 0/1 rejects the cache")
+        r.expect(ScanCache.decode(Data("{\"v\":1e999,\"strings\":[],\"files\":[]}".utf8)) == nil, "an infinite version is rejected without trapping")
         r.expect(ScanCache.decode(Data("not json at all".utf8)) == nil, "garbage rejected")
         r.expect(ScanCache.decode(Data()) == nil, "empty file rejected")
         let whole = ScanCache.encode(files: [f.path: f])
@@ -792,31 +835,31 @@ public enum SelfTest {
         }
 
         // Infinity through an exponent.
-        _ = decodeMustNotTrap("{\"v\":1,\"strings\":[],\"files\":[{\"p\":\"/a\",\"sz\":1e999,\"mt\":0,\"in\":1,\"of\":0,\"e\":[]}]}",
+        _ = decodeMustNotTrap("{\"v\":2,\"strings\":[],\"files\":[{\"p\":\"/a\",\"sz\":1e999,\"mt\":0,\"in\":1,\"of\":0,\"e\":[]}]}",
                               "huge size does not trap")
         // NaN: 0 * 10^inf.
-        _ = decodeMustNotTrap("{\"v\":1,\"strings\":[],\"files\":[{\"p\":\"/a\",\"sz\":0e999,\"mt\":0,\"in\":1,\"of\":0,\"e\":[]}]}",
+        _ = decodeMustNotTrap("{\"v\":2,\"strings\":[],\"files\":[{\"p\":\"/a\",\"sz\":0e999,\"mt\":0,\"in\":1,\"of\":0,\"e\":[]}]}",
                               "NaN size does not trap")
         // Negative offsets.
-        let negative = decodeMustNotTrap("{\"v\":1,\"strings\":[],\"files\":[{\"p\":\"/a\",\"sz\":10,\"mt\":0,\"in\":1,\"of\":-5,\"e\":[]}]}",
+        let negative = decodeMustNotTrap("{\"v\":2,\"strings\":[],\"files\":[{\"p\":\"/a\",\"sz\":10,\"mt\":0,\"in\":1,\"of\":-5,\"e\":[]}]}",
                                          "negative offset does not trap")
         r.equal(negative?["/a"]?.offset ?? 99, 0, "negative offset clamped to zero")
         // A 400 digit integer.
         let longDigits = String(repeating: "9", count: 400)
-        _ = decodeMustNotTrap("{\"v\":1,\"strings\":[],\"files\":[{\"p\":\"/a\",\"sz\":\(longDigits),\"mt\":0,\"in\":1,\"of\":0,\"e\":[]}]}",
+        _ = decodeMustNotTrap("{\"v\":2,\"strings\":[],\"files\":[{\"p\":\"/a\",\"sz\":\(longDigits),\"mt\":0,\"in\":1,\"of\":0,\"e\":[]}]}",
                               "400-digit size does not trap")
         // Out-of-range numbers inside an event row.
-        _ = decodeMustNotTrap("{\"v\":1,\"strings\":[\"s\"],\"files\":[{\"p\":\"/a\",\"sz\":10,\"mt\":0,\"in\":1,\"of\":0,\"e\":[[1e999,0,0,0,1e999,2,3,0,4,\"m\"]]}]}",
+        _ = decodeMustNotTrap("{\"v\":2,\"strings\":[\"s\"],\"files\":[{\"p\":\"/a\",\"sz\":10,\"mt\":0,\"in\":1,\"of\":0,\"e\":[[1e999,0,0,0,1e999,2,3,0,4,0,\"m\"]]}]}",
                               "huge event numbers do not trap")
-        _ = decodeMustNotTrap("{\"v\":1,\"strings\":[\"s\"],\"files\":[{\"p\":\"/a\",\"sz\":10,\"mt\":0,\"in\":1,\"of\":0,\"e\":[[0e999,0,0,0,1,2,3,0,4,\"m\"]]}]}",
+        _ = decodeMustNotTrap("{\"v\":2,\"strings\":[\"s\"],\"files\":[{\"p\":\"/a\",\"sz\":10,\"mt\":0,\"in\":1,\"of\":0,\"e\":[[0e999,0,0,0,1,2,3,0,4,0,\"m\"]]}]}",
                               "NaN event timestamp does not trap")
         // A string-table index that is out of range must not trap either.
-        let badIndex = decodeMustNotTrap("{\"v\":1,\"strings\":[],\"files\":[{\"p\":\"/a\",\"sz\":10,\"mt\":0,\"in\":1,\"of\":0,\"e\":[[1500,7,8,9,1,2,3,0,4,\"m\"]]}]}",
+        let badIndex = decodeMustNotTrap("{\"v\":2,\"strings\":[],\"files\":[{\"p\":\"/a\",\"sz\":10,\"mt\":0,\"in\":1,\"of\":0,\"e\":[[1500,7,8,9,1,2,3,0,4,0,\"m\"]]}]}",
                                          "out-of-range string index does not trap")
         r.equal(badIndex?["/a"]?.events.first?.model ?? "-", "", "out-of-range string index reads as empty")
 
         // A cache whose numbers are survivable must still produce sane state.
-        if let ok = ScanCache.decode(Data("{\"v\":1,\"strings\":[\"s\"],\"files\":[{\"p\":\"/a\",\"sz\":10,\"mt\":1.5,\"in\":3,\"of\":10,\"e\":[]}]}".utf8)) {
+        if let ok = ScanCache.decode(Data("{\"v\":2,\"strings\":[\"s\"],\"files\":[{\"p\":\"/a\",\"sz\":10,\"mt\":1.5,\"in\":3,\"of\":10,\"e\":[]}]}".utf8)) {
             r.equal(ok["/a"]?.offset ?? 0, 10, "well-formed hostile-shaped cache still decodes")
         } else {
             r.expect(false, "well-formed cache rejected")
@@ -824,7 +867,7 @@ public enum SelfTest {
 
         // Every event a decoded cache produces must be usable by the aggregator without trapping.
         let agg = Aggregator(pricing: PricingResolver())
-        let hostileEventCache = "{\"v\":1,\"strings\":[\"s\",\"m\",\"/c\"],\"files\":[{\"p\":\"/a\",\"sz\":10,\"mt\":0,\"in\":1,\"of\":0,\"e\":[[1e999,0,1,2,1,2,3,0,4,\"m\"]]}]}"
+        let hostileEventCache = "{\"v\":2,\"strings\":[\"s\",\"m\",\"/c\"],\"files\":[{\"p\":\"/a\",\"sz\":10,\"mt\":0,\"in\":1,\"of\":0,\"e\":[[1e999,0,1,2,1,2,3,0,4,0,\"m\"]]}]}"
         if let files = ScanCache.decode(Data(hostileEventCache.utf8)) {
             let events = files.values.flatMap { $0.events }.sorted { $0.timestamp < $1.timestamp }
             let snap = agg.snapshot(events: events, now: Date(), planName: "", limits: [],
@@ -1106,8 +1149,8 @@ public enum SelfTest {
     // MARK: - Attribution determinism
 
     /// The same event id can appear in two files (a resumed or forked session copies old lines).
-    /// Whichever session it is attributed to, a cold scan and a warm cache load must agree, or the
-    /// Sessions list changes shape depending on how the app happened to start.
+    /// A cold scan and a warm cache load must agree on its session, or the Sessions list changes
+    /// shape depending on how the app happened to start. (`ownershipRule` below covers the rule.)
     static func attributionDeterminism(_ r: inout Runner) {
         r.section("attribution determinism")
         guard let dir = makeTempDir() else { r.expect(false, "temp dir"); return }
@@ -1136,7 +1179,9 @@ public enum SelfTest {
         r.expect(warm.loadCache(from: cacheURL), "cache round trip loads")
         let warmSession = warm.sortedEvents().first { $0.id == "shared_1" }?.sessionID ?? ""
         r.equal(warmSession, coldSession, "cold scan and warm cache agree on the session of a duplicated event")
-        r.equal(coldSession, "bbbbbbbb-2222-2222-2222-222222222222", "the newest transcript owns a duplicated event")
+        // Both files carry the line with the same timestamp, so the tie-break decides: the smaller
+        // path, not (as before amendment A5) whichever file was modified last.
+        r.equal(coldSession, "aaaaaaaa-1111-1111-1111-111111111111", "an exact tie goes to the smaller path, not the newest file")
         r.equal(warm.uniqueEventCount, 2, "warm load keeps the dedup")
 
         // The same thing again, but with the newest transcript large enough that the cold scan
@@ -1167,9 +1212,488 @@ public enum SelfTest {
         let warm2 = TranscriptScanner(root: dir2)
         r.expect(warm2.loadCache(from: cacheURL2), "deferred-file cache loads")
         let warmSession2 = warm2.sortedEvents().first { $0.id == "shared_2" }?.sessionID ?? ""
-        r.equal(coldSession2, "dddddddd-4444-4444-4444-444444444444",
-                "a deferred newest file still owns the duplicated event on a cold scan")
+        r.equal(coldSession2, "cccccccc-3333-3333-3333-333333333333",
+                "a deferred file does not change the owner of a duplicated event on a cold scan")
         r.equal(warmSession2, coldSession2, "deferred cold scan and warm cache agree")
+    }
+
+    // MARK: - Ownership rule (amendment A5)
+
+    /// Everything a snapshot is built from, per event: owner session, timestamp and counts. Two
+    /// scanners with the same signature publish identical Sessions rows and totals.
+    static func signature(_ s: TranscriptScanner) -> [String] {
+        s.sortedEvents().map { e in
+            "\(e.id)|\(e.sessionID)|\(Int((e.timestamp * 1000).rounded()))|\(e.input)|\(e.output)|"
+                + "\(e.cacheWriteTotal)|\(e.cacheWrite1h)|\(e.cacheRead)|\(e.fast)"
+        }.sorted()
+    }
+
+    /// One order-independent rule on every path (SPEC 4.1): a response belongs to the file whose
+    /// sighting of it is earliest (a file's sighting being its latest line, when the response
+    /// finished there), ties to the smaller path. Cold scan, warm load, tail in any file order,
+    /// tail after an append or a truncation must all land on the same index.
+    static func ownershipRule(_ r: inout Runner) {
+        r.section("ownership rule (A5)")
+        let now = Date().timeIntervalSince1970
+        let base = now - 3_600
+        let orig = "cccccccc-3333-3333-3333-333333333333"      // where the responses were first seen
+        let resumed = "aaaaaaaa-1111-1111-1111-111111111111"   // copies r1 with a NEW timestamp; smallest path
+        let forked = "bbbbbbbb-2222-2222-2222-222222222222"    // copies r2 with its original timestamp
+        let names = [orig, resumed, forked]
+        let contents: [String: [String]] = [
+            orig: [assistantLine(id: "r1", ts: base, model: "claude-opus-5", output: 10),
+                   assistantLine(id: "r1", ts: base + 1, model: "claude-opus-5", output: 300),
+                   assistantLine(id: "r2", ts: base + 10, model: "claude-opus-5", output: 50),
+                   assistantLine(id: "o_only", ts: base + 40, model: "claude-opus-5", output: 4)],
+            resumed: [assistantLine(id: "r1", ts: now - 60, model: "claude-opus-5", output: 300),
+                      assistantLine(id: "res_only", ts: now - 50, model: "claude-opus-5", output: 6)],
+            forked: [assistantLine(id: "r2", ts: base + 10, model: "claude-opus-5", output: 50),
+                     assistantLine(id: "fork_only", ts: base + 50, model: "claude-opus-5", output: 8)],
+        ]
+        func url(_ dir: URL, _ name: String) -> URL { dir.appendingPathComponent(name + ".jsonl") }
+        func write(_ dir: URL, _ name: String) { writeLines(to: url(dir, name), contents[name] ?? []) }
+
+        // 1. Cold scan. The resumed copy is the newest file and the original the oldest, so the
+        //    rule used before A5 (newest file first) would have handed r1 to the resumed session.
+        guard let dir = makeTempDir() else { r.expect(false, "temp dir"); return }
+        defer { try? FileManager.default.removeItem(at: dir) }
+        for name in names { write(dir, name) }
+        for (name, age) in [(orig, 600.0), (forked, 300.0), (resumed, 0.0)] {
+            try? FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: now - age)],
+                                                   ofItemAtPath: url(dir, name).path)
+        }
+        let cold = TranscriptScanner(root: dir)
+        cold.fullScan(now: Date())
+        let expected = signature(cold)
+        let events = Dictionary(uniqueKeysWithValues: cold.sortedEvents().map { ($0.id, $0) })
+        r.equal(events.count, 5, "five unique responses across three files")
+        r.equal(events["r1"]?.sessionID ?? "", orig, "a copied response stays with the session it was first seen in")
+        r.close(events["r1"]?.timestamp ?? 0, base + 1, 1e-3,
+                "a copy's later timestamp does not drag the response to now (latest line in a file, earliest file)")
+        r.equal(events["r1"]?.output ?? 0, 300, "counts are the maximum over every sighting")
+        r.equal(events["r2"]?.sessionID ?? "", forked, "an exact tie goes to the smaller path")
+        r.equal(cold.owner(of: "r2") ?? "", url(dir, forked).path, "owner(of:) names the owning file")
+        r.equal(cold.sharedIDCount, 2, "two ids are carried by more than one file")
+
+        // 2. Warm load from the cache.
+        guard let support = makeTempDir() else { r.expect(false, "temp dir"); return }
+        defer { try? FileManager.default.removeItem(at: support) }
+        let cacheURL = support.appendingPathComponent("scan-cache.json")
+        try? ScanCache.encode(files: cold.files).write(to: cacheURL)
+        let warm = TranscriptScanner(root: dir)
+        r.expect(warm.loadCache(from: cacheURL), "cache loads")
+        r.equal(signature(warm), expected, "warm load == cold scan")
+
+        // 3. Tail, with the files arriving one at a time in every possible order, and all at once.
+        var mismatches: [String] = []
+        var orders: [[String]] = []
+        for a in names { for b in names where b != a { for c in names where c != a && c != b { orders.append([a, b, c]) } } }
+        for order in orders {
+            let label = order.map { String($0.prefix(1)) }.joined()
+            guard let d = makeTempDir() else { r.expect(false, "temp dir"); return }
+            defer { try? FileManager.default.removeItem(at: d) }
+            let oneByOne = TranscriptScanner(root: d)
+            oneByOne.fullScan(now: Date())
+            for name in order {
+                write(d, name)
+                _ = oneByOne.tail(paths: [url(d, name).path], now: Date())
+            }
+            if signature(oneByOne) != expected { mismatches.append("one by one " + label) }
+            let atOnce = TranscriptScanner(root: d)
+            _ = atOnce.tail(paths: order.map { url(d, $0).path }, now: Date())
+            if signature(atOnce) != expected { mismatches.append("at once " + label) }
+            oneByOne.fullScan(now: Date())
+            if signature(oneByOne) != expected { mismatches.append("rescan " + label) }
+        }
+        r.equal(mismatches, [], "tail in every file order == cold scan")
+
+        // 4. An append that moves ownership. The forked file's own later chunk of r2 makes its
+        //    sighting later than the original's, so the tie is gone and r2 goes to the original.
+        append(to: url(dir, forked), assistantLine(id: "r2", ts: base + 11, model: "claude-opus-5", output: 60) + "\n")
+        _ = cold.tail(paths: [url(dir, forked).path], now: Date())
+        _ = warm.tail(paths: [url(dir, forked).path], now: Date())
+        let afterAppend = TranscriptScanner(root: dir)
+        afterAppend.fullScan(now: Date())
+        r.equal(signature(cold), signature(afterAppend), "tail after an append == cold scan of the same files")
+        r.equal(signature(warm), signature(afterAppend), "warm-loaded tail after an append == cold scan")
+        let r2 = cold.sortedEvents().first { $0.id == "r2" }
+        r.equal(r2?.sessionID ?? "", orig, "a file's own later chunk hands a tied response to the earlier sighting")
+        r.equal(r2?.output ?? 0, 60, "... with the grown output")
+        r.close(r2?.timestamp ?? 0, base + 10, 1e-3, "... at the earlier sighting's timestamp")
+
+        // 5. Truncation of the copy: the resumed file rewritten without r1.
+        writeLines(to: url(dir, resumed), [assistantLine(id: "res_only", ts: now - 50, model: "claude-opus-5", output: 6)])
+        _ = cold.tail(paths: [url(dir, resumed).path], now: Date())
+        let afterTruncation = TranscriptScanner(root: dir)
+        afterTruncation.fullScan(now: Date())
+        r.equal(signature(cold), signature(afterTruncation), "tail after a truncation == cold scan")
+        r.equal(cold.sortedEvents().first { $0.id == "r1" }?.sessionID ?? "", orig, "r1 never moved")
+    }
+
+    /// Eviction takes a response as a whole. Line by line, the original's 12 day old line would go
+    /// and the resumed copy's recent line would stay, bringing the response back as today's usage.
+    static func evictionOfCopies(_ r: inout Runner) {
+        r.section("eviction of copied responses")
+        let now = Date().timeIntervalSince1970
+        let day = 86_400.0
+        let orig = "dddddddd-4444-4444-4444-444444444444.jsonl"
+        let copy = "eeeeeeee-5555-5555-5555-555555555555.jsonl"
+        func populate(_ dir: URL) {
+            writeLines(to: dir.appendingPathComponent(orig), [
+                assistantLine(id: "old_x", ts: now - 12 * day, model: "claude-opus-5", output: 900),
+                assistantLine(id: "keep", ts: now - 100, model: "claude-opus-5", output: 1)])
+            writeLines(to: dir.appendingPathComponent(copy), [
+                assistantLine(id: "old_x", ts: now - 40, model: "claude-opus-5", output: 900),
+                assistantLine(id: "copy_only", ts: now - 30, model: "claude-opus-5", output: 2)])
+        }
+        guard let dir = makeTempDir(), let dir2 = makeTempDir() else { r.expect(false, "temp dir"); return }
+        defer {
+            try? FileManager.default.removeItem(at: dir)
+            try? FileManager.default.removeItem(at: dir2)
+        }
+        populate(dir)
+        let cold = TranscriptScanner(root: dir)
+        cold.fullScan(now: Date())
+        r.close(cold.sortedEvents().first { $0.id == "old_x" }?.timestamp ?? 0, now - 12 * day, 1e-3,
+                "an old response copied into a new session keeps its old timestamp")
+        r.expect(cold.evict(now: Date()), "eviction drops it")
+        r.equal(Set(cold.sortedEvents().map { $0.id }), ["keep", "copy_only"],
+                "the copy leaves with the original instead of coming back as today's usage")
+        r.expect(!cold.files.values.contains { $0.events.contains { $0.id == "old_x" } },
+                 "no file keeps a line of the evicted response")
+        r.expect(!cold.evict(now: Date()), "a second eviction has nothing to drop")
+
+        // Warm load of the pruned cache, and a tree that arrives through tail, agree after eviction.
+        let cacheURL = dir2.appendingPathComponent("scan-cache.json")
+        try? ScanCache.encode(files: cold.files).write(to: cacheURL)
+        let warm = TranscriptScanner(root: dir)
+        r.expect(warm.loadCache(from: cacheURL), "pruned cache loads")
+        r.equal(signature(warm), signature(cold), "warm load after eviction == cold scan after eviction")
+        guard let dir3 = makeTempDir() else { r.expect(false, "temp dir"); return }
+        defer { try? FileManager.default.removeItem(at: dir3) }
+        let tailed = TranscriptScanner(root: dir3)
+        tailed.fullScan(now: Date())
+        populate(dir3)
+        _ = tailed.tail(paths: [dir3.appendingPathComponent(copy).path, dir3.appendingPathComponent(orig).path], now: Date())
+        tailed.evict(now: Date())
+        r.equal(signature(tailed), signature(cold), "tail then eviction == cold scan then eviction")
+    }
+
+    // MARK: - Fast mode (amendment A5)
+
+    static func parseLine(_ line: String) -> UsageEvent? {
+        var parser = TranscriptLineParser()
+        return Array(line.utf8).withUnsafeBytes { parser.event(from: $0, fallbackSession: "s") }
+    }
+
+    static func fastMode(_ r: inout Runner) {
+        r.section("fast mode (A5)")
+        let table = PricingTable.builtIn
+        let opusFast = table.price(for: "claude-opus-5", fast: true)
+        r.close(opusFast.input, 10, 1e-12, "Opus 5 fast input is $10")
+        r.close(opusFast.output, 50, 1e-12, "Opus 5 fast output is $50")
+        r.close(opusFast.cacheWrite5m, 12.5, 1e-12, "fast 5m cache write is 1.25x the fast input")
+        r.close(opusFast.cacheWrite1h, 20, 1e-12, "fast 1h cache write is 2x the fast input")
+        r.close(opusFast.cacheRead, 1, 1e-12, "fast cache read is 0.1x the fast input")
+        r.close(table.price(for: "claude-opus-5[1m]", fast: true).input, 10, 1e-12, "the 1M variant too")
+        r.close(table.price(for: "claude-opus-5").input, 5, 1e-12, "standard Opus 5 unchanged")
+        // Fast-mode rates for other models are not confirmed: standard rates.
+        r.close(table.price(for: "claude-opus-4-8", fast: true).input, 5, 1e-12, "Opus 4.8 fast priced at standard (unconfirmed)")
+        r.close(table.price(for: "claude-sonnet-5", fast: true).input, 2, 1e-12, "Sonnet 5 fast priced at standard")
+        let fable = table.price(for: "claude-fable-5-1", fast: true)
+        r.close(fable.input, 10, 1e-12, "Fable 5.1 fast priced at standard")
+        r.close(fable.cacheRead, 0.25, 1e-12, "... cache read still $0.25")
+
+        let resolver = PricingResolver()
+        let standard = resolver.cost(model: "claude-opus-5", input: 1_000_000, output: 1_000_000, cacheWrite5m: 1_000_000,
+                                     cacheWrite1h: 1_000_000, cacheRead: 1_000_000)
+        let fast = resolver.cost(model: "claude-opus-5", input: 1_000_000, output: 1_000_000, cacheWrite5m: 1_000_000,
+                                 cacheWrite1h: 1_000_000, cacheRead: 1_000_000, fast: true)
+        r.close(standard, 46.75, 1e-9, "standard Opus 5 blended cost")
+        r.close(fast, 93.5, 1e-9, "fast Opus 5 blended cost is exactly twice standard")
+        r.close(resolver.cost(model: "claude-opus-5", input: 1_000_000, output: 0, cacheWrite5m: 0, cacheWrite1h: 0,
+                              cacheRead: 0), 5, 1e-9, "the memoised standard price is not polluted by the fast one")
+
+        // pricing.json: a file written before A5 has no fastMultiplier, and still prices Opus 5
+        // fast at twice its own Opus 5 row; an explicit multiplier wins; a bad one is ignored.
+        let legacy = PricingTable.parse(Data("""
+        {"models":[{"match":"opus-5","input":6,"output":30},{"match":"*","input":3,"output":15}]}
+        """.utf8))
+        r.close(legacy?.price(for: "claude-opus-5", fast: true).input ?? -1, 12, 1e-12,
+                "a pricing.json without fastMultiplier uses the built-in 2x on its own Opus 5 price")
+        r.close(legacy?.price(for: "claude-sonnet-5", fast: true).input ?? -1, 3, 1e-12, "... and 1x for the rest")
+        let explicit = PricingTable.parse(Data("""
+        {"models":[{"match":"opus-5","input":5,"output":25,"fastMultiplier":6},{"match":"sonnet","input":3,"output":15,"fastMultiplier":"x"}]}
+        """.utf8))
+        r.close(explicit?.price(for: "claude-opus-5", fast: true).input ?? -1, 30, 1e-12, "an explicit fastMultiplier wins")
+        r.close(explicit?.price(for: "claude-sonnet-5", fast: true).input ?? -1, 3, 1e-12, "an unusable fastMultiplier is ignored")
+        r.equal(explicit?.price(for: "claude-sonnet-5").match ?? "", "sonnet", "... and its row is kept")
+        r.expect(String(decoding: table.jsonData(), as: UTF8.self).contains("\"fastMultiplier\": 2"),
+                 "the default pricing.json spells out the Opus 5 fast multiplier")
+
+        // The Claude 3.5 Haiku row matches the real id (the row used to say `haiku-3-5`).
+        r.equal(table.price(for: "claude-3-5-haiku-20241022").match, "3-5-haiku", "Claude 3.5 Haiku finds its row")
+        r.close(table.price(for: "claude-3-5-haiku-20241022").input, 0.8, 1e-12, "... at $0.80")
+        r.close(table.price(for: "claude-3-haiku-20240307").input, 0.25, 1e-12, "Claude 3 Haiku still the generic row")
+        r.close(table.price(for: "claude-haiku-4-5-20251001").input, 1, 1e-12, "Haiku 4.5 unaffected")
+
+        // Parsing: only the enum value "fast" counts.
+        let base = Date().timeIntervalSince1970 - 120
+        r.expect(parseLine(assistantLine(id: "s1", ts: base, model: "claude-opus-5", output: 1, speed: "\"fast\""))?.fast == true,
+                 "usage.speed \"fast\" is parsed")
+        r.expect(parseLine(assistantLine(id: "s2", ts: base, model: "claude-opus-5", output: 1, speed: "\"standard\""))?.fast == false,
+                 "\"standard\" is not fast")
+        r.expect(parseLine(assistantLine(id: "s3", ts: base, model: "claude-opus-5", output: 1))?.fast == false, "absent is not fast")
+        r.expect(parseLine(assistantLine(id: "s4", ts: base, model: "claude-opus-5", output: 1, speed: "7"))?.fast == false,
+                 "a non-string speed is not fast")
+
+        // End to end: scanner, cache and aggregator.
+        guard let dir = makeTempDir(), let support = makeTempDir() else { r.expect(false, "temp dir"); return }
+        defer {
+            try? FileManager.default.removeItem(at: dir)
+            try? FileManager.default.removeItem(at: support)
+        }
+        writeLines(to: dir.appendingPathComponent("ffffffff-6666-6666-6666-666666666666.jsonl"), [
+            assistantLine(id: "fx", ts: base, model: "claude-opus-5", output: 100),               // first chunk, no speed yet
+            assistantLine(id: "fx", ts: base + 1, model: "claude-opus-5", output: 1000, speed: "\"fast\""),
+            assistantLine(id: "sx", ts: base + 2, model: "claude-opus-5", output: 1000, speed: "\"standard\""),
+        ])
+        let scanner = TranscriptScanner(root: dir)
+        scanner.fullScan(now: Date())
+        let byID = Dictionary(uniqueKeysWithValues: scanner.sortedEvents().map { ($0.id, $0) })
+        r.expect(byID["fx"]?.fast == true, "a response is fast when any of its lines says so")
+        r.expect(byID["sx"]?.fast == false, "the standard response is not")
+        r.equal(scanner.fastEventCount, 1, "one fast event counted for the diagnostics")
+        let cacheURL = support.appendingPathComponent("scan-cache.json")
+        try? ScanCache.encode(files: scanner.files).write(to: cacheURL)
+        let warm = TranscriptScanner(root: dir)
+        r.expect(warm.loadCache(from: cacheURL), "cache loads")
+        r.equal(signature(warm), signature(scanner), "the fast flag survives the scan cache")
+
+        let agg = Aggregator(pricing: PricingResolver())
+        let snap = agg.snapshot(events: scanner.sortedEvents(), now: Date(), planName: "", limits: [],
+                                liveStatus: .disabled, localStatus: LocalStatus())
+        let one = PricingResolver().cost(model: "claude-opus-5", input: 3, output: 1000, cacheWrite5m: 0,
+                                         cacheWrite1h: 800, cacheRead: 24_000)
+        r.close(snap.hours.reduce(0) { $0 + $1.costUSD }, 3 * one, 1e-9,
+                "the aggregator prices the fast response at 2x and the standard one at 1x")
+    }
+
+    // MARK: - Live HTTP outcomes, Retry-After
+
+    static func liveHTTP(_ r: inout Runner) {
+        r.section("live HTTP outcomes")
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        func kind(_ o: LiveFetchOutcome) -> String {
+            switch o {
+            case .success(_, let limits): return "success:\(limits.count)"
+            case .authExpired: return "authExpired"
+            case .rateLimited: return "rateLimited"
+            case .failure(let m): return "failure:" + m
+            }
+        }
+        func outcome(_ status: Int, _ body: String? = nil, retryAfter: String? = nil) -> LiveFetchOutcome {
+            LimitsClient.outcome(status: status, body: body.map { Data($0.utf8) }, retryAfterHeader: retryAfter,
+                                 planName: "MAX", now: now)
+        }
+        r.equal(kind(outcome(401)), "authExpired", "401 is an expired token")
+        let forbidden = outcome(403)
+        r.equal(kind(forbidden), "failure:http 403 forbidden", "403 is an error the user can read, not auth expiry")
+        var backoff: TimeInterval = 0
+        var waits: [TimeInterval] = []
+        for _ in 0..<8 {
+            let s = LivePollPolicy.schedule(outcome: forbidden, now: now, previousBackoff: backoff)
+            backoff = s.backoff
+            waits.append(s.nextAllowedAt.timeIntervalSince(now))
+        }
+        r.expect(waits[0] > 0 && waits[1] > waits[0], "repeated 403s back off")
+        r.close(waits[7], 900, 1e-6, "... to 15 minutes")
+        r.equal(kind(outcome(500)), "failure:http 500", "other statuses are errors")
+        r.equal(kind(outcome(200, "not json")), "failure:bad json", "an unreadable 200 is an error")
+        r.equal(kind(outcome(200, "{\"five_hour\":{\"utilization\":5}}")), "success:1", "a 200 is parsed")
+
+        func retry(_ v: String?) -> TimeInterval? { LimitsClient.retryAfter(v, now: now).map { $0.timeIntervalSince(now) } }
+        let http = DateFormatter()
+        http.locale = Locale(identifier: "en_US_POSIX")
+        http.timeZone = TimeZone(identifier: "GMT")
+        http.dateFormat = "EEE, dd MMM yyyy HH:mm:ss 'GMT'"
+        r.close(retry("120") ?? -1, 120, 1e-6, "delta-seconds")
+        r.close(retry(" 3600 ") ?? -1, 3600, 1e-6, "an hour is honoured (it used to be cut to 15 min)")
+        r.close(retry("86400") ?? -1, 6 * 3600, 1e-6, "more than 6 h is capped at 6 h")
+        r.close(retry("0") ?? -1, 1, 1e-6, "at least 1 s")
+        r.close(retry(http.string(from: now.addingTimeInterval(7200))) ?? -1, 7200, 1e-6, "an HTTP-date")
+        r.close(retry(http.string(from: now.addingTimeInterval(-60))) ?? -1, 1, 1e-6, "an HTTP-date in the past means 1 s")
+        r.expect(retry("soon") == nil, "garbage is ignored (the caller backs off)")
+        r.expect(retry("inf") == nil && retry("nan") == nil, "non-finite values are ignored")
+        r.expect(retry(nil) == nil && retry("") == nil, "no header, no date")
+        let limited = outcome(429, retryAfter: "7200")
+        if case .rateLimited(let at) = limited {
+            r.close(at?.timeIntervalSince(now) ?? -1, 7200, 1e-6, "429 carries the Retry-After date")
+        } else {
+            r.expect(false, "429 is rate limited")
+        }
+        r.close(LivePollPolicy.schedule(outcome: limited, now: now, previousBackoff: 0).nextAllowedAt.timeIntervalSince(now),
+                7200, 1e-6, "the poll schedule honours a 2 h Retry-After")
+        r.close(LivePollPolicy.schedule(outcome: .rateLimited(retryAt: now.addingTimeInterval(36_000)), now: now,
+                                        previousBackoff: 0).nextAllowedAt.timeIntervalSince(now),
+                6 * 3600, 1e-6, "... and caps a longer one at 6 h")
+    }
+
+    // MARK: - Limit reset roll-forward and the post-reset poll
+
+    static func limitRollover(_ r: inout Runner) {
+        r.section("limit reset roll-forward")
+        let now = Date(timeIntervalSince1970: 1_800_000_000)
+        let session = LimitGauge(id: "session", kind: .session, title: "SESSION (5H)", percent: 40,
+                                 resetsAt: now.addingTimeInterval(-10), windowSeconds: 18_000, severity: "warning", isActive: true)
+        let weekly = LimitGauge(id: "weekly_all", kind: .weeklyAll, title: "WEEK - ALL MODELS", percent: 20,
+                                resetsAt: now.addingTimeInterval(3 * 86_400), windowSeconds: 604_800)
+        let rolled = LimitRollover.roll([session, weekly], now: now)
+        r.expect(rolled.rolled, "a limit past its reset is rolled")
+        r.close(rolled.gauges[0].percent, 0, 1e-12, "the new window starts at 0 %")
+        r.close(rolled.gauges[0].resetsAt?.timeIntervalSince(now.addingTimeInterval(-10)) ?? -1, 18_000, 1e-6,
+                "its reset moves forward one 5 h window")
+        r.equal(rolled.gauges[0].severity, "normal", "severity resets with it")
+        r.expect(rolled.gauges[0].isActive && rolled.gauges[0].id == "session", "identity is kept")
+        r.equal(rolled.gauges[1], weekly, "a limit inside its window is untouched")
+        r.expect(!LimitRollover.roll(rolled.gauges, now: now.addingTimeInterval(1)).rolled, "a rolled limit stays put until its new reset")
+
+        let offline = LimitRollover.roll([session], now: now.addingTimeInterval(12 * 3600))
+        r.close(offline.gauges[0].resetsAt?.timeIntervalSince(now.addingTimeInterval(-10)) ?? -1, 3 * 18_000, 1e-6,
+                "offline across several windows: the next reset still in the future")
+        let atReset = LimitRollover.roll([session], now: now.addingTimeInterval(-10))
+        r.expect(atReset.rolled && (atReset.gauges[0].resetsAt ?? .distantPast) > now.addingTimeInterval(-10),
+                 "at the reset instant the new window has begun")
+        let weekLater = LimitRollover.roll([weekly], now: now.addingTimeInterval(3 * 86_400 + 1))
+        r.close(weekLater.gauges[0].resetsAt?.timeIntervalSince(now) ?? -1, 10 * 86_400, 1e-6, "weekly rolls by 7 days")
+        let other = LimitGauge(id: "x", kind: .other, title: "X", percent: 55, resetsAt: now.addingTimeInterval(-1), windowSeconds: nil)
+        let unknown = LimitRollover.roll([other], now: now)
+        r.expect(unknown.gauges[0].percent == 0 && unknown.gauges[0].resetsAt == nil,
+                 "an unknown window: 0 % and reset unknown rather than a made-up time")
+        let noReset = LimitGauge(id: "n", kind: .session, title: "N", percent: 30, resetsAt: nil, windowSeconds: 18_000)
+        let untouched = LimitRollover.roll([weekly, noReset], now: now)
+        r.expect(!untouched.rolled && untouched.gauges == [weekly, noReset], "nothing due, nothing changed")
+
+        r.section("post-reset poll")
+        func poll(force: Bool = false, lastAgo: Double, nextAllowedIn: Double = -1, rateLimited: Bool = false,
+                  recent: Bool = true, resetIn: Double?) -> Bool {
+            LivePollPolicy.shouldPoll(force: force, now: now, lastPollAt: now.addingTimeInterval(-lastAgo),
+                                      nextAllowedAt: now.addingTimeInterval(nextAllowedIn), rateLimited: rateLimited,
+                                      recentActivity: recent, interval: 60, resetPollAt: resetIn.map { now.addingTimeInterval($0) })
+        }
+        r.expect(poll(lastAgo: 20, resetIn: -0.5), "a due post-reset poll goes out ahead of the normal cadence")
+        r.expect(!poll(lastAgo: 20, resetIn: 3), "... not before it is due")
+        r.expect(!poll(lastAgo: 5, resetIn: -1), "... never within 10 s of the last poll")
+        r.expect(!poll(lastAgo: 20, nextAllowedIn: 200, rateLimited: true, resetIn: -1), "... never inside a 429 Retry-After")
+        r.expect(!poll(lastAgo: 20, nextAllowedIn: 60, resetIn: -1), "... never inside an error backoff")
+        r.expect(poll(lastAgo: 61, resetIn: nil), "normal cadence with local activity")
+        r.expect(!poll(lastAgo: 61, recent: false, resetIn: nil), "idle cadence is 300 s")
+        r.expect(poll(lastAgo: 301, recent: false, resetIn: nil), "... and is reached")
+        r.expect(poll(force: true, lastAgo: 11, nextAllowedIn: 60, resetIn: nil), "Refresh Now overrides our own backoff")
+        r.expect(!poll(force: true, lastAgo: 11, nextAllowedIn: 60, rateLimited: true, resetIn: nil), "... but not a 429")
+        r.expect(!poll(force: true, lastAgo: 3, resetIn: nil), "... and not within 10 s")
+        r.equal([0.0, 0.5, 1.0].map { LivePollPolicy.resetPollDelay(unit: $0) }, [2, 4, 6], "the post-reset poll waits 2-6 s")
+        r.expect((0..<50).allSatisfy { _ in (2...6).contains(LivePollPolicy.resetPollDelay()) }, "the jitter stays in range")
+
+        r.section("temp dirs")
+        r.expect(isSelfTestDirName("tokenamp-selftest-1234"), "a numbered fixture folder is ours")
+        r.expect(!isSelfTestDirName("tokenamp-selftest-"), "the bare prefix is not")
+        r.expect(!isSelfTestDirName("tokenamp-selftest-6F9619FF-8B86-D011-B42D-00CF4FC964FF"), "the app self-test's UUID folders are not")
+        r.expect(!isSelfTestDirName("tokenamp-selftest-12x"), "trailing junk is not")
+    }
+
+    // MARK: - Time-zone change
+
+    /// A travelling laptop: the same aggregator must put "today" at the new zone's midnight
+    /// without a relaunch.
+    static func timeZoneChange(_ r: inout Runner) {
+        r.section("time zone change without relaunch")
+        let savedZone = NSTimeZone.default
+        defer { NSTimeZone.default = savedZone }
+        guard let ny = TimeZone(identifier: "America/New_York"), let tokyo = TimeZone(identifier: "Asia/Tokyo") else {
+            r.expect(false, "test time zones unavailable"); return
+        }
+        let now = Date(timeIntervalSince1970: 1_789_940_232)
+        let agg = Aggregator(pricing: PricingResolver())      // created in the process's own zone
+        NSTimeZone.default = ny
+        let a = agg.snapshot(events: [], now: now, planName: "", limits: [], liveStatus: .disabled, localStatus: LocalStatus())
+        NSTimeZone.default = tokyo
+        let b = agg.snapshot(events: [], now: now, planName: "", limits: [], liveStatus: .disabled, localStatus: LocalStatus())
+        var nyCal = Calendar(identifier: .gregorian)
+        nyCal.timeZone = ny
+        var tokyoCal = Calendar(identifier: .gregorian)
+        tokyoCal.timeZone = tokyo
+        r.equal(a.today.start, nyCal.startOfDay(for: now), "today follows a change to New York")
+        r.equal(b.today.start, tokyoCal.startOfDay(for: now), "... and then to Tokyo, same aggregator")
+        r.expect(a.today.start != b.today.start, "the fixture really moves the day boundary")
+    }
+
+    // MARK: - The provider across a limit reset
+
+    /// A real provider with the network replaced: the session limit resets while a 429 is in force.
+    /// The gauge must drop to 0 % at the reset (not sit at 40 % with the countdown at 00:00), and
+    /// the poll for the new window must wait for the Retry-After, then happen promptly, once.
+    static func providerLiveReset(_ r: inout Runner) {
+        r.section("provider across a limit reset")
+        guard let tree = makeTempDir(), let support = makeTempDir() else { r.expect(false, "temp dirs"); return }
+        defer {
+            try? FileManager.default.removeItem(at: tree)
+            try? FileManager.default.removeItem(at: support)
+        }
+        let t0 = Date()
+        let resetAt = t0.addingTimeInterval(2.5)
+        let retryAt = t0.addingTimeInterval(4.5)
+        let weeklyReset = t0.addingTimeInterval(3 * 86_400)
+        func gauges(session: Double, weekly: Double, sessionReset: Date) -> [LimitGauge] {
+            [LimitGauge(id: "session", kind: .session, title: "SESSION (5H)", percent: session, resetsAt: sessionReset,
+                        windowSeconds: 18_000, isActive: true),
+             LimitGauge(id: "weekly_all", kind: .weeklyAll, title: "WEEK - ALL MODELS", percent: weekly, resetsAt: weeklyReset,
+                        windowSeconds: 604_800)]
+        }
+        let lock = NSLock()
+        var calls: [Date] = []
+        func callTimes() -> [Date] { lock.lock(); defer { lock.unlock() }; return calls }
+        let fetch: (@escaping (LiveFetchOutcome) -> Void) -> Void = { deliver in
+            lock.lock()
+            calls.append(Date())
+            let n = calls.count
+            lock.unlock()
+            let outcome: LiveFetchOutcome
+            switch n {
+            case 1: outcome = .success(planName: "MAX 20X", limits: gauges(session: 40, weekly: 20, sessionReset: resetAt))
+            case 2: outcome = .rateLimited(retryAt: retryAt)
+            default: outcome = .success(planName: "MAX 20X",
+                                        limits: gauges(session: 7, weekly: 21, sessionReset: resetAt.addingTimeInterval(18_000)))
+            }
+            DispatchQueue.global().async { deliver(outcome) }
+        }
+        let provider = LiveUsageProvider(root: tree, cacheURL: support.appendingPathComponent("scan-cache.json"),
+                                         pricingURL: support.appendingPathComponent("pricing.json"),
+                                         fetch: fetch, minPollSpacing: 0.2, resetPollDelay: { 0.3 })
+        var latest: UsageSnapshot?
+        provider.onChange = { latest = $0 }
+        provider.start()
+        defer { provider.stop() }
+        func session() -> LimitGauge? { latest?.limit(.session) }
+
+        r.expect(waitUntil(3) { session()?.percent == 40 }, "the first poll's reading is published")
+        _ = waitUntil(0.4) { false }
+        provider.refreshNow()
+        r.expect(waitUntil(3) { if case .rateLimited = latest?.liveStatus { return true } else { return false } },
+                 "the second poll is rate limited")
+        r.expect(waitUntil(4) { session()?.percent == 0 }, "at the reset the session gauge drops to 0 %")
+        r.expect(Date() >= resetAt, "... not before the reset")
+        r.close(session()?.resetsAt?.timeIntervalSince(resetAt) ?? -1, 18_000, 1e-3, "... and counts down to the next window")
+        r.close(latest?.limit(.weeklyAll)?.percent ?? -1, 20, 1e-9, "the weekly gauge is untouched")
+        r.equal(callTimes().count, 2, "no poll inside the Retry-After wait")
+
+        r.expect(waitUntil(6) { callTimes().count >= 3 }, "the post-reset poll goes out")
+        let third = callTimes().count >= 3 ? callTimes()[2] : .distantFuture
+        r.expect(third >= retryAt, "... after the Retry-After, not at reset + jitter")
+        r.expect(third.timeIntervalSince(retryAt) < 4, "... and promptly once it is allowed (\(String(format: "%.1f", third.timeIntervalSince(retryAt))) s)")
+        r.expect(waitUntil(3) { session()?.percent == 7 }, "the new window's reading replaces the rolled gauge")
+        _ = waitUntil(1.5) { false }
+        r.equal(callTimes().count, 3, "exactly one post-reset poll")
     }
 
     // MARK: - The parallel read path
@@ -1331,22 +1855,61 @@ public enum SelfTest {
     }
 
     /// A realistic transcript line. Content is a placeholder — the parser must never look at it.
-    static func assistantLine(id: String, ts: Double, model: String, output: Int, sessionID: String = "ignored-session") -> String {
-        """
-        {"parentUuid":"p","isSidechain":false,"message":{"model":"\(model)","id":"\(id)","type":"message","role":"assistant","content":[{"type":"text","text":"placeholder"}],"stop_reason":"end_turn","usage":{"input_tokens":3,"cache_creation_input_tokens":800,"cache_read_input_tokens":24000,"output_tokens":\(output),"service_tier":"standard","cache_creation":{"ephemeral_1h_input_tokens":800,"ephemeral_5m_input_tokens":0}}},"requestId":"req","type":"assistant","uuid":"u","timestamp":"\(iso(ts))","sessionId":"\(sessionID)","cwd":"/tmp/project","version":"9.9.9"}
+    /// `speed` is the raw JSON value of `usage.speed` (e.g. `"\"fast\""`), or nil to leave it out.
+    static func assistantLine(id: String, ts: Double, model: String, output: Int, sessionID: String = "ignored-session",
+                              speed: String? = nil) -> String {
+        let speedField = speed.map { ",\"speed\":\($0)" } ?? ""
+        return """
+        {"parentUuid":"p","isSidechain":false,"message":{"model":"\(model)","id":"\(id)","type":"message","role":"assistant","content":[{"type":"text","text":"placeholder"}],"stop_reason":"end_turn","usage":{"input_tokens":3,"cache_creation_input_tokens":800,"cache_read_input_tokens":24000,"output_tokens":\(output),"service_tier":"standard"\(speedField),"cache_creation":{"ephemeral_1h_input_tokens":800,"ephemeral_5m_input_tokens":0}}},"requestId":"req","type":"assistant","uuid":"u","timestamp":"\(iso(ts))","sessionId":"\(sessionID)","cwd":"/tmp/project","version":"9.9.9"}
         """
     }
 
+    static let tempPrefix = "tokenamp-selftest-"
+    /// Every fixture folder this run created, so the end of the run can remove all of them even
+    /// when a check bailed out before registering its own `defer`.
+    private static var createdTempDirs: [URL] = []
+
     static func makeTempDir() -> URL? {
         let url = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
-            .appendingPathComponent("tokenamp-selftest-\(UInt32.random(in: 0...UInt32.max))", isDirectory: true)
+            .appendingPathComponent(tempPrefix + "\(UInt32.random(in: 0...UInt32.max))", isDirectory: true)
         do {
             try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
             // The scanner resolves its root, so the fixtures have to live at resolved paths too.
-            return URL(fileURLWithPath: TokenampPaths.realPath(url.path), isDirectory: true)
+            let resolved = URL(fileURLWithPath: TokenampPaths.realPath(url.path), isDirectory: true)
+            createdTempDirs.append(resolved)
+            return resolved
         } catch {
             return nil
         }
+    }
+
+    /// Removes this run's fixture folders, and leftovers of earlier runs that died before their
+    /// clean-up ran (a trap, a timeout). Only `tokenamp-selftest-<digits>`: the app's own self-test
+    /// names its folders with a UUID and is left alone. Leftovers are removed only when older than
+    /// ten minutes, so a run going on in parallel keeps its fixtures.
+    static func removeTempDirs() {
+        let fm = FileManager.default
+        for url in createdTempDirs { try? fm.removeItem(at: url) }
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory(), isDirectory: true)
+        let cutoff = Date().addingTimeInterval(-600)
+        for name in (try? fm.contentsOfDirectory(atPath: tmp.path)) ?? [] where isSelfTestDirName(name) {
+            let path = tmp.appendingPathComponent(name, isDirectory: true).path
+            guard let attrs = try? fm.attributesOfItem(atPath: path),
+                  (attrs[.type] as? FileAttributeType) == .typeDirectory,
+                  let modified = attrs[.modificationDate] as? Date, modified < cutoff else { continue }
+            try? fm.removeItem(atPath: path)
+        }
+    }
+
+    static func leftoverTempDirs() -> [URL] {
+        createdTempDirs.filter { FileManager.default.fileExists(atPath: $0.path) }
+    }
+
+    /// `tokenamp-selftest-` followed by decimal digits and nothing else.
+    static func isSelfTestDirName(_ name: String) -> Bool {
+        guard name.hasPrefix(tempPrefix) else { return false }
+        let rest = name.dropFirst(tempPrefix.count)
+        return !rest.isEmpty && rest.allSatisfy { ("0"..."9").contains($0) }
     }
 
     static func writeLines(to url: URL, _ lines: [String]) {

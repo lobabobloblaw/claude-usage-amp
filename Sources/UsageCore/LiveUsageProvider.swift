@@ -20,6 +20,10 @@ public struct ScanDiagnostics: Sendable, Equatable {
     /// Worst snapshot rebuild seen in this run — the number that matters for UI smoothness.
     public var maxSnapshotBuildSeconds: Double = 0
     public var transcriptRoot = ""
+    /// Unique events that more than one transcript carries (resumed or forked sessions).
+    public var sharedEvents = 0
+    /// Unique events served in fast mode (`usage.speed == "fast"`).
+    public var fastEvents = 0
 
     public var throughputMBPerSecond: Double {
         guard lastFullScanSeconds > 0 else { return 0 }
@@ -71,6 +75,7 @@ public final class LiveUsageProvider: UsageProvider {
                     self.limits = []
                     self.planName = ""
                     self.liveStatus = .disabled
+                    self.resetPollAt = nil
                 }
                 // Without this the cached aggregate would be reused and the gauges would linger.
                 self.limitsStamp += 1
@@ -107,6 +112,8 @@ public final class LiveUsageProvider: UsageProvider {
     private let pricing = PricingResolver()
     private let aggregator: Aggregator
     private let limitsClient = LimitsClient()
+    /// Self-test seam: replaces the network fetch. nil means `limitsClient`.
+    private let fetchOverride: ((@escaping (LiveFetchOutcome) -> Void) -> Void)?
     private var watcher: FileWatcher?
     private var ticker: DispatchSourceTimer?
 
@@ -130,6 +137,12 @@ public final class LiveUsageProvider: UsageProvider {
     private var nextAllowedPollAt = Date.distantPast
     private var pollBackoff: TimeInterval = 0
     private var pollInFlight = false
+    /// Set when a limit's reset time passes: poll soon after it for the new window's reading.
+    private var resetPollAt: Date?
+    /// Minimum gap between polls, and the delay from a reset to the poll after it. Fixed at init;
+    /// only the self-test shortens them.
+    private let minPollSpacing: TimeInterval
+    private let resetPollDelay: () -> TimeInterval
     private var lastEventEpoch: Double = 0
     /// Hand-off slot for a live result that arrived while the scan queue was busy scanning.
     private let liveLock = NSLock()
@@ -157,9 +170,21 @@ public final class LiveUsageProvider: UsageProvider {
     // MARK: - Init
 
     /// Testing / self-test entry point: everything relocatable.
-    public init(root: URL = TokenampPaths.transcriptsRoot,
-                cacheURL: URL = TokenampPaths.scanCacheURL,
-                pricingURL: URL = TokenampPaths.pricingURL) {
+    public convenience init(root: URL = TokenampPaths.transcriptsRoot,
+                            cacheURL: URL = TokenampPaths.scanCacheURL,
+                            pricingURL: URL = TokenampPaths.pricingURL) {
+        self.init(root: root, cacheURL: cacheURL, pricingURL: pricingURL, fetch: nil)
+    }
+
+    /// Self-test entry point: `fetch` stands in for the network (nil means the real
+    /// `LimitsClient`), and the poll spacing and post-reset delay can be shortened.
+    init(root: URL, cacheURL: URL, pricingURL: URL,
+         fetch: ((@escaping (LiveFetchOutcome) -> Void) -> Void)?,
+         minPollSpacing: TimeInterval = LivePollPolicy.minSpacing,
+         resetPollDelay: @escaping () -> TimeInterval = { LivePollPolicy.resetPollDelay() }) {
+        fetchOverride = fetch
+        self.minPollSpacing = minPollSpacing
+        self.resetPollDelay = resetPollDelay
         scanner = TranscriptScanner(root: root)
         aggregator = Aggregator(pricing: pricing)
         self.cacheURL = cacheURL
@@ -290,7 +315,9 @@ public final class LiveUsageProvider: UsageProvider {
             runFullScan(progressive: false)
             scanner.evict(now: Date())
         }
-        if tickCount % 5 == 0 { checkLivePoll(force: false) }
+        // Every 5 s for the normal cadence; every second while a post-reset poll is due, so the
+        // new window's reading arrives a few seconds after the reset rather than up to 5 s later.
+        if tickCount % 5 == 0 || (resetPollAt.map { Date() >= $0 } ?? false) { checkLivePoll(force: false) }
         if tickCount % 10 == 0 { saveCacheIfNeeded(force: false) }
         publish(force: false)
     }
@@ -373,20 +400,21 @@ public final class LiveUsageProvider: UsageProvider {
     private func checkLivePoll(force: Bool) {
         guard liveEnabled, !paused, !pollInFlight else { return }
         let now = Date()
-        if force {
-            guard now.timeIntervalSince(lastPollAt) >= 10 else { return }
-            // A 429 is the service telling us to wait. "Refresh Now" overrides our own backoff, but
-            // not an explicit instruction from the server — ignoring it only earns a longer ban.
-            if case .rateLimited = liveStatus, now < nextAllowedPollAt { return }
-        } else {
-            let recentLocalActivity = lastEventEpoch > 0 && (now.timeIntervalSince1970 - lastEventEpoch) <= 300
-            let interval = recentLocalActivity ? min(900, max(30, pollInterval)) : 300
-            guard now.timeIntervalSince(lastPollAt) >= interval else { return }
-            guard now >= nextAllowedPollAt else { return }
-        }
+        var rateLimited = false
+        if case .rateLimited = liveStatus { rateLimited = true }
+        let recentLocalActivity = lastEventEpoch > 0 && (now.timeIntervalSince1970 - lastEventEpoch) <= 300
+        // A 429 is the service telling us to wait. "Refresh Now" overrides our own backoff, but
+        // not an explicit instruction from the server — ignoring it only earns a longer ban. The
+        // post-reset poll waits for both (SPEC 4.3).
+        guard LivePollPolicy.shouldPoll(force: force, now: now, lastPollAt: lastPollAt,
+                                        nextAllowedAt: nextAllowedPollAt, rateLimited: rateLimited,
+                                        recentActivity: recentLocalActivity, interval: pollInterval,
+                                        resetPollAt: resetPollAt, minSpacing: minPollSpacing) else { return }
         pollInFlight = true
         livePollAttempted = true
-        limitsClient.fetch { [weak self] outcome in
+        // Any poll that starts after a reset fetches the new window, so it satisfies the pending one.
+        resetPollAt = nil
+        let deliver: (LiveFetchOutcome) -> Void = { [weak self] outcome in
             guard let self else { return }
             // Park the result where the scan loop can pick it up too: a cold scan owns the scan
             // queue for as long as it runs, and the gauges should not have to wait for it.
@@ -395,6 +423,7 @@ public final class LiveUsageProvider: UsageProvider {
             self.liveLock.unlock()
             self.scanQueue.async { self.drainLiveOutcome() }
         }
+        if let fetchOverride { fetchOverride(deliver) } else { limitsClient.fetch(completion: deliver) }
     }
 
     /// Scan queue only.
@@ -416,7 +445,10 @@ public final class LiveUsageProvider: UsageProvider {
         switch outcome {
         case .success(let plan, let gauges):
             planName = plan
-            limits = gauges
+            // A reading whose reset time has already passed (the service had not rolled over yet)
+            // is shown as the new, empty window straight away. No extra poll is scheduled for it:
+            // one just happened, and the normal cadence fetches the real reading.
+            limits = LimitRollover.roll(gauges, now: lastPollAt).gauges
             liveStatus = .ok(lastFetch: lastPollAt)
         case .authExpired:
             liveStatus = .authExpired
@@ -464,6 +496,8 @@ public final class LiveUsageProvider: UsageProvider {
         diag.snapshotBuildSeconds = build
         diag.maxSnapshotBuildSeconds = maxSnapshotBuild
         diag.transcriptRoot = scanner.root.path
+        diag.sharedEvents = scanner.sharedIDCount
+        diag.fastEvents = scanner.fastEventCount
 
         lastEventEpoch = snap.lastEventAt?.timeIntervalSince1970 ?? lastEventEpoch
 
@@ -479,7 +513,22 @@ public final class LiveUsageProvider: UsageProvider {
         }
     }
 
+    /// A limit whose reset time has passed is republished as the new window (0 %, next reset), and
+    /// a poll is scheduled a few seconds later for the service's own reading. Without this the
+    /// gauge would sit at its pre-reset value with the countdown stuck at 00:00 until the next
+    /// poll — minutes normally, indefinitely offline.
+    private func rollLimitsIfNeeded(now: Date) {
+        guard !limits.isEmpty else { return }
+        let r = LimitRollover.roll(limits, now: now)
+        guard r.rolled else { return }
+        limits = r.gauges
+        limitsStamp += 1
+        let due = now.addingTimeInterval(resetPollDelay())
+        resetPollAt = min(resetPollAt ?? .distantFuture, due)
+    }
+
     private func buildSnapshot(now: Date) -> UsageSnapshot {
+        if liveEnabled { rollLimitsIfNeeded(now: now) }
         let fineIndex = (now.timeIntervalSince1970 / UsageSnapshot.fineBucketSeconds).rounded(.down)
         if let cached = cachedSnapshot,
            cachedGeneration == scanner.generation,

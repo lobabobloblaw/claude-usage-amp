@@ -2,8 +2,8 @@ import Foundation
 
 /// Hand-rolled ISO-8601 reader. `ISO8601DateFormatter` is far too slow for tens of thousands of
 /// transcript lines and refuses 6-digit fractional seconds in some configurations; this accepts
-/// `YYYY-MM-DDTHH:MM:SS`, any number of fractional digits, and `Z`, `+HH:MM`, `+HHMM` or nothing
-/// (treated as UTC, which is what Claude Code writes).
+/// `YYYY-MM-DDTHH:MM:SS`, any number of fractional digits, and `Z`, `+HH:MM`, `+HHMM`, `+HH` or
+/// nothing (treated as UTC, which is what Claude Code writes). A truncated offset (`+0`) is rejected.
 public enum ISO8601 {
 
     /// Epoch seconds, or nil when the text is not a timestamp.
@@ -14,7 +14,10 @@ public enum ISO8601 {
             let c = bytes[i]
             return (c >= 0x30 && c <= 0x39) ? Int(c - 0x30) : nil
         }
+        /// `len` digits starting at `i`, or nil when they are not all there. The bounds check is what
+        /// makes a short offset such as `+05` or `+0` at the very end of the text safe to probe.
         @inline(__always) func num(_ i: Int, _ len: Int) -> Int? {
+            guard i >= 0, len >= 0, i + len <= n else { return nil }
             var v = 0
             for k in 0..<len {
                 guard let d = digit(i + k) else { return nil }

@@ -11,7 +11,10 @@ final class Aggregator {
     private let pricing: PricingResolver
     private var displayNameCache: [String: String] = [:]
     private var projectNameCache: [String: String] = [:]
-    private let calendar = Calendar.current
+    /// Local calendar days follow the machine's current time zone. `autoupdatingCurrent` tracks a
+    /// time-zone change (travel, a manual change in System Settings) without a relaunch, where a
+    /// `Calendar.current` captured once would keep the zone the process started in.
+    private let calendar = Calendar.autoupdatingCurrent
 
     init(pricing: PricingResolver) {
         self.pricing = pricing
@@ -90,7 +93,7 @@ final class Aggregator {
             if t > lastEvent && t <= futureCutoff { lastEvent = t }
             let cost = pricing.cost(model: e.model, input: e.input, output: e.output,
                                     cacheWrite5m: e.cacheWrite5m, cacheWrite1h: e.cacheWrite1h,
-                                    cacheRead: e.cacheRead)
+                                    cacheRead: e.cacheRead, fast: e.fast)
             let counts = e.counts
 
             if let fi = slot(t, fineSeconds, fineFirst, fineCount) { fineAcc[fi].add(counts, cost) }

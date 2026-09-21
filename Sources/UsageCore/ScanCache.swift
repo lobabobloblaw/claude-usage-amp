@@ -9,7 +9,9 @@ import Foundation
 /// scanner falls back to a cold scan.
 enum ScanCache {
 
-    static let version = 1
+    /// 2 (amendment A5): every event row carries the fast-mode flag. A version 1 file cannot say
+    /// which of its events were fast, so it is discarded and the next launch scans cold once.
+    static let version = 2
 
     // MARK: - JSON writing helpers
 
@@ -79,6 +81,7 @@ enum ScanCache {
                 body.append(0x2C); putInt(&body, e.cacheWriteTotal)
                 body.append(0x2C); putInt(&body, e.cacheWrite1h)
                 body.append(0x2C); putInt(&body, e.cacheRead)
+                body.append(0x2C); putInt(&body, e.fast ? 1 : 0)
                 body.append(0x2C); putQuoted(&body, e.id)
                 body.append(0x5D)
             }
@@ -126,7 +129,8 @@ enum ScanCache {
         while let key = c.nextKey() {
             switch key {
             case "v":
-                guard let v = c.number(), Int(v) == version else { return nil }
+                // Compared as a Double: `Int(v)` would trap on a `1e999` or NaN version.
+                guard let v = c.number(), v == Double(version) else { return nil }
                 sawVersion = true
             case "strings":
                 guard c.openArray() else { return nil }
@@ -201,7 +205,9 @@ enum ScanCache {
                           let writeTotal = c.number(), c.comma(),
                           let write1h = c.number(), c.comma(),
                           let read = c.number(), c.comma(),
+                          let fast = c.number(), c.comma(),
                           let id = c.string(), c.closeArray() else { return nil }
+                    guard fast == 0 || fast == 1 else { return nil }
                     let seconds = ms / 1000
                     // A timestamp outside the plausible epoch range means the row is not ours.
                     guard seconds.isFinite, seconds >= 0, seconds <= maxEventEpoch else { return nil }
@@ -218,7 +224,8 @@ enum ScanCache {
                                                output: max(0, clampedInt(output)),
                                                cacheWriteTotal: max(0, clampedInt(writeTotal)),
                                                cacheWrite1h: max(0, clampedInt(write1h)),
-                                               cacheRead: max(0, clampedInt(read))))
+                                               cacheRead: max(0, clampedInt(read)),
+                                               fast: fast == 1))
                     if !c.commaOrEnd() { return nil }
                 }
             default:

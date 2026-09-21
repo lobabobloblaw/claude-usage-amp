@@ -71,6 +71,9 @@ struct TranscriptLineParser {
             if write1h > writeTotal { writeTotal = a + b }
         }
 
+        // `usage.speed` is an enum ("standard" / "fast"); only the value "fast" means anything here.
+        let fast = (usage["speed"] as? String) == "fast"
+
         // A line is data from another process: clamp rather than trust, so no later sum can trap.
         @inline(__always) func sane(_ v: Int) -> Int { min(max(0, v), Int(UsageEvent.maxTokenCount)) }
 
@@ -83,7 +86,8 @@ struct TranscriptLineParser {
                           output: sane(output),
                           cacheWriteTotal: sane(writeTotal),
                           cacheWrite1h: sane(write1h),
-                          cacheRead: sane(read))
+                          cacheRead: sane(read),
+                          fast: fast)
     }
 
     @inline(__always)

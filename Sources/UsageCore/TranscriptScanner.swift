@@ -42,12 +42,15 @@ final class TranscriptScanner {
     static var deferredFileBytes: UInt64 = 16 << 20
 
     private(set) var files: [String: ScannedFile] = [:]
-    /// Global dedup index, keyed by `message.id`.
-    private(set) var byID: [String: UsageEvent] = [:]
+    /// Global dedup index, keyed by `message.id`. See `IndexEntry` for the ownership rule.
+    private(set) var byID: [String: IndexEntry] = [:]
     private(set) var stats = ScanStats()
 
     private var parser = TranscriptLineParser()
     private var sortedCache: [UsageEvent]?
+    /// Counted alongside `sortedCache`, for the diagnostics readout.
+    private(set) var sharedIDCount = 0
+    private(set) var fastEventCount = 0
     /// Bumped whenever the event set changes, so the aggregator knows to rebuild.
     private(set) var generation: UInt64 = 0
 
@@ -99,6 +102,9 @@ final class TranscriptScanner {
         /// The file shrank or its inode changed: its events were thrown away and re-read, so the
         /// global dedup index has to be rebuilt from scratch.
         case reset
+        /// New events arrived, but at least one of them has an id another file also carries, so
+        /// the ownership rule has to be re-derived by a rebuild.
+        case appendedShared
     }
 
     /// Full pass: discover, then parse whatever is new in each file, newest first.
@@ -165,19 +171,18 @@ final class TranscriptScanner {
             let results = TranscriptScanner.parseInParallel(batch, states: batch.map { files[$0.path] },
                                                            shouldStop: shouldStop)
             for r in results {
-                merge(result: r)
+                if merge(result: r) { needsRebuild = true }
                 if !r.events.isEmpty { changed = true }
             }
             done += batch.count
             onFileProgress?(done, candidates.count)
         }
 
-        // Files are *read* in batches, and a file with a lot of unread bytes is deliberately read
-        // after the quick ones, so the order events reach the index is not the newest-first order
-        // that decides which session owns a duplicated `message.id`. Rebuilding once at the end of
-        // any scan that actually read something makes a cold start land on exactly the same
-        // attribution as a warm start from the cache (which rebuilds by definition).
-        if needsRebuild || changed { rebuildIndex() }
+        // The ownership rule does not depend on read order, and the incremental merge applies it
+        // exactly for ids only one file carries. Anything else (a reset file, a vanished file, an
+        // id shared between files) is re-derived once here, so a cold scan lands on exactly the
+        // same index as a warm start from the cache (which rebuilds by definition).
+        if needsRebuild { rebuildIndex() }
         stats.lastScanBytes = stats.bytesRead - bytesBefore
         stats.lastFullScanSeconds = Date().timeIntervalSince(t0)
         stats.lastFullScanAt = Date()
@@ -257,9 +262,10 @@ final class TranscriptScanner {
         return results.compactMap { $0 }
     }
 
-    /// Fold one file's parse result into the shared state. Scan queue only.
-    private func merge(result r: FileParseResult) {
-        guard var state = files[r.path] else { return }
+    /// Fold one file's parse result into the shared state. Scan queue only. Returns true when the
+    /// index must be rebuilt to apply the ownership rule.
+    private func merge(result r: FileParseResult) -> Bool {
+        guard var state = files[r.path] else { return false }
         state.offset = r.endOffset
         if !r.events.isEmpty { state.events.append(contentsOf: r.events) }
         files[r.path] = state
@@ -270,7 +276,7 @@ final class TranscriptScanner {
         stats.eventsSeen += r.events.count
         stats.filesParsed += 1
 
-        if !r.events.isEmpty { mergeIntoIndex(r.events) }
+        return r.events.isEmpty ? false : mergeIntoIndex(r.events, path: r.path)
     }
 
     /// Incremental tail of a set of paths reported by the watcher.
@@ -292,7 +298,7 @@ final class TranscriptScanner {
             switch scan(candidate: c) {
             case .unchanged: break
             case .appended: changed = true
-            case .reset: changed = true; needsRebuild = true
+            case .reset, .appendedShared: changed = true; needsRebuild = true
             }
         }
         if needsRebuild { rebuildIndex() }
@@ -353,38 +359,66 @@ final class TranscriptScanner {
         if resetHappened { return .reset }
         if newEvents.isEmpty { return .unchanged }
         // Fast path: fold the new events straight into the dedup index.
-        mergeIntoIndex(newEvents)
-        return .appended
+        return mergeIntoIndex(newEvents, path: c.path) ? .appendedShared : .appended
     }
 
     // MARK: - Dedup index
 
-    private func mergeIntoIndex(_ events: [UsageEvent]) {
-        for e in events {
-            if var existing = byID[e.id] {
-                existing.merge(e)
-                byID[e.id] = existing
+    /// Fold newly read events of one file into the index.
+    ///
+    /// Exact for an id that only this file carries (the common case: a live session appending its
+    /// own responses). When an id is also in another file, or this file's sighting of an id that
+    /// is shared changes, the entry is updated provisionally and the return value asks the caller
+    /// for a rebuild, which re-derives the owner from every file's sighting.
+    @discardableResult
+    private func mergeIntoIndex(_ events: [UsageEvent], path: String) -> Bool {
+        var needsRebuild = false
+        for (id, sighting) in TranscriptScanner.sightings(events) {
+            if var entry = byID[id] {
+                if entry.owner == path {
+                    entry.event.mergeWithinFile(sighting)
+                    if entry.shared { needsRebuild = true }
+                } else {
+                    entry.combine(sighting: sighting, path: path)
+                    needsRebuild = true
+                }
+                byID[id] = entry
             } else {
-                byID[e.id] = e
+                byID[id] = IndexEntry(event: sighting, owner: path)
             }
         }
         sortedCache = nil
         generation &+= 1
+        return needsRebuild
     }
 
-    /// Rebuild the dedup index from scratch, in a deterministic order (newest file first, matching
-    /// the scan order) so that "the first session an id was seen in" is stable across runs.
+    /// One sighting per id: the lines of one file merged with `mergeWithinFile` (first line's
+    /// identity, latest timestamp, maximum counts).
+    private static func sightings(_ events: [UsageEvent]) -> [String: UsageEvent] {
+        var local = [String: UsageEvent](minimumCapacity: events.count)
+        for e in events {
+            if var existing = local[e.id] {
+                existing.mergeWithinFile(e)
+                local[e.id] = existing
+            } else {
+                local[e.id] = e
+            }
+        }
+        return local
+    }
+
+    /// Rebuild the dedup index from scratch. The result does not depend on the order the files are
+    /// visited in (see `IndexEntry`), so every path to the same file state gives the same index.
     func rebuildIndex() {
-        var index: [String: UsageEvent] = [:]
+        var index: [String: IndexEntry] = [:]
         index.reserveCapacity(byID.count + 256)
-        let ordered = files.values.sorted { $0.mtime == $1.mtime ? $0.path < $1.path : $0.mtime > $1.mtime }
-        for f in ordered {
-            for e in f.events {
-                if var existing = index[e.id] {
-                    existing.merge(e)
-                    index[e.id] = existing
+        for f in files.values {
+            for (id, sighting) in TranscriptScanner.sightings(f.events) {
+                if var existing = index[id] {
+                    existing.combine(sighting: sighting, path: f.path)
+                    index[id] = existing
                 } else {
-                    index[e.id] = e
+                    index[id] = IndexEntry(event: sighting, owner: f.path)
                 }
             }
         }
@@ -396,32 +430,50 @@ final class TranscriptScanner {
     // MARK: - Eviction
 
     /// Drop events older than the TTL. Returns true when anything was dropped.
+    ///
+    /// An event goes as a whole, judged by the timestamp the index gives it (its earliest
+    /// sighting), and every line of it leaves every file. Evicting line by line would let a
+    /// resumed copy that carries a new timestamp outlive the original line, and the rebuild would
+    /// then bring an 11 day old response back as today's usage in the resumed session.
     @discardableResult
     func evict(now: Date) -> Bool {
         let cutoff = now.timeIntervalSince1970 - eventTTL
-        var dropped = false
+        var doomed = Set<String>()
+        for (id, entry) in byID where entry.event.timestamp < cutoff { doomed.insert(id) }
+        guard !doomed.isEmpty else { return false }
         for (path, var f) in files {
             let before = f.events.count
-            f.events.removeAll { $0.timestamp < cutoff }
-            if f.events.count != before {
-                files[path] = f
-                dropped = true
-            }
+            f.events.removeAll { doomed.contains($0.id) }
+            if f.events.count != before { files[path] = f }
         }
-        if dropped { rebuildIndex() }
-        return dropped
+        rebuildIndex()
+        return true
     }
 
     // MARK: - Output
 
-    /// Deduped events, oldest first. Cached until the event set changes.
+    /// Deduped events, oldest first (ties by id, so the order is fully deterministic). Cached until
+    /// the event set changes.
     func sortedEvents() -> [UsageEvent] {
         if let c = sortedCache { return c }
-        var all = Array(byID.values)
-        all.sort { $0.timestamp < $1.timestamp }
+        var all: [UsageEvent] = []
+        all.reserveCapacity(byID.count)
+        var shared = 0
+        var fast = 0
+        for entry in byID.values {
+            all.append(entry.event)
+            if entry.shared { shared += 1 }
+            if entry.event.fast { fast += 1 }
+        }
+        all.sort { $0.timestamp == $1.timestamp ? $0.id < $1.id : $0.timestamp < $1.timestamp }
         sortedCache = all
+        sharedIDCount = shared
+        fastEventCount = fast
         return all
     }
+
+    /// Path of the file that owns an id (self-test and diagnostics).
+    func owner(of id: String) -> String? { byID[id]?.owner }
 
     var uniqueEventCount: Int { byID.count }
 

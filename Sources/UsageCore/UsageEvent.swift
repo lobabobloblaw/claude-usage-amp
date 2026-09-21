@@ -30,6 +30,9 @@ struct UsageEvent {
     /// whole write is priced at the 5 m rate.
     var cacheWrite1h: Int
     var cacheRead: Int
+    /// `usage.speed == "fast"`: the response was served in fast mode, which is priced at a premium
+    /// (SPEC 4.2, amendment A5). Only the enum value is looked at, never any content.
+    var fast: Bool = false
 
     @inline(__always) var cacheWrite5m: Int { max(0, cacheWriteTotal - cacheWrite1h) }
 
@@ -37,20 +40,60 @@ struct UsageEvent {
         TokenCountsLite(input: input, output: output, cacheWrite: cacheWriteTotal, cacheRead: cacheRead)
     }
 
-    /// Merge another sighting of the same `message.id`.
+    /// Merge another line of the same `message.id` **from the same file**.
     ///
     /// One API response is written once per content block with growing `output_tokens`, so the
     /// field-wise maximum reproduces "the values from the last line seen" while staying independent
-    /// of the order files happen to be scanned in. Identity fields keep the first sighting; the
-    /// timestamp advances to the newest line of the response (when it finished).
+    /// of line order. Identity fields keep the first line; the timestamp advances to the newest line
+    /// of the response (when it finished). Across files the timestamp rule is the opposite: see
+    /// `IndexEntry.combine`.
     @inline(__always)
-    mutating func merge(_ other: UsageEvent) {
+    mutating func mergeWithinFile(_ other: UsageEvent) {
         timestamp = max(timestamp, other.timestamp)
+        mergeCounts(other)
+    }
+
+    /// The order-independent part of every merge: token counts are the field-wise maximum and a
+    /// response is fast if any sighting says so.
+    @inline(__always)
+    mutating func mergeCounts(_ other: UsageEvent) {
         input = max(input, other.input)
         output = max(output, other.output)
         cacheWriteTotal = max(cacheWriteTotal, other.cacheWriteTotal)
         cacheWrite1h = max(cacheWrite1h, other.cacheWrite1h)
         cacheRead = max(cacheRead, other.cacheRead)
+        fast = fast || other.fast
+    }
+}
+
+/// One entry of the global dedup index: the merged event plus the file that owns it.
+///
+/// Ownership rule (SPEC 4.1, amendment A5), the same on every path — cold scan, warm cache load,
+/// tail, rebuild after eviction or truncation — and independent of the order files are read in:
+/// each file contributes one sighting per id (its lines merged with `mergeWithinFile`, so its
+/// timestamp is when the response finished *in that file*). The owner is the file whose sighting
+/// is earliest, ties broken by the smaller path. The event takes the owner's timestamp and identity
+/// (session, cwd, model) and the maximum token counts over all sightings. A resumed or forked
+/// session that copies an old response with a new timestamp therefore neither takes the response
+/// away from the session it was first seen in, nor drags it to "now".
+struct IndexEntry {
+    var event: UsageEvent
+    /// Path of the owning file.
+    var owner: String
+    /// True once a second file has contributed a sighting. The incremental tail path can only
+    /// maintain the rule by itself for single-file ids; a shared id is re-derived by a rebuild.
+    var shared: Bool = false
+
+    /// Fold in another file's sighting of the same id. Commutative and associative: the result does
+    /// not depend on which file came first.
+    @inline(__always)
+    mutating func combine(sighting e: UsageEvent, path: String) {
+        shared = true
+        let incomingOwns = e.timestamp < event.timestamp || (e.timestamp == event.timestamp && path < owner)
+        var merged = incomingOwns ? e : event
+        merged.mergeCounts(incomingOwns ? event : e)
+        if incomingOwns { owner = path }
+        event = merged
     }
 }
 

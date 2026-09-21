@@ -29,6 +29,10 @@ It really whips the llama's tokens.
 > `cacheRead` field. A row without that field uses the model's built-in cache-read ratio, so a file
 > written before A4 is priced correctly without being rewritten. See §4.2. This supersedes "cache
 > read = 0.1× input" wherever it appears.
+> **A5 (2026-09-21, data-layer corrections):** one order-independent ownership rule for copied
+> responses (earliest sighting wins) and whole-response eviction (§4.1); Opus 5 fast mode priced at
+> 2× and the 3.5 Haiku row fixed (§4.2); expired limits roll to 0 % with a poll just after the
+> reset, 403 is an error with backoff, `Retry-After` honoured up to 6 h (§4.3). Scan cache v2.
 
 Toolchain on this machine: Swift 6.3 via Command Line Tools only. **No Xcode, no XCTest, no
 xcodebuild.** Everything builds with `swift build` and a shell script assembles the `.app`.
@@ -362,14 +366,20 @@ Implements `UsageProvider` as `LiveUsageProvider` and fills every field of `Usag
 - **Dedup by `message.id` globally**: one API response is written as several lines (one per content
   block) repeating the same id, and output token counts grow across them. Keep exactly one event per
   id, with the values from the *last* line seen (max of output_tokens). Resumed/forked sessions copy
-  old lines into new files — the global id dedup handles that; attribute the event to the first
-  session it was seen in.
+  old lines into new files — the global id dedup handles that. **Ownership (A5), one rule on every
+  path and independent of file order:** each file's sighting of an id is its lines merged (max
+  counts, *latest* timestamp: when the response finished in that file); the event belongs to the
+  file with the *earliest* sighting, ties to the smaller path, and takes that sighting's timestamp,
+  session and cwd, with the maximum counts over all sightings. A copy with a new timestamp therefore
+  neither moves the response to the resumed session nor drags it to "now".
 - Subagent transcripts are attributed to their parent session row (the `<session-uuid>` directory
   name, or the line's `sessionId`, whichever identifies the parent — inspect the real layout).
 - Incremental: remember per-file byte offset + size + mtime; on change, parse only appended bytes
   (if the file shrank or its inode changed, re-parse it). Persist per-file parsed events and offsets
   in `~/Library/Application Support/Tokenamp/scan-cache.json` (versioned, written atomically,
-  debounced) so relaunch is instant. Evict events older than 11 days.
+  debounced) so relaunch is instant; a cache of another version is discarded (cold scan once). Evict
+  events older than 11 days, by the event's own timestamp and with every line of it in every file,
+  so a recent copy cannot outlive the original line.
 - Watch the root with an FSEvents stream (file events, ~0.3 s latency) → tail the changed files →
   publish a new snapshot immediately. Also rescan on a 30 s safety timer.
 - **Privacy rule for you, the worker:** transcripts contain the user's private conversations and
@@ -395,23 +405,33 @@ would also match it:
 | `sonnet-5` | 2 | 10 | 0.2 (0.1×) |
 | `sonnet` | 3 | 15 | 0.3 (0.1×) |
 | `haiku-4` | 1 | 5 | 0.1 (0.1×) |
-| `haiku-3-5` | 0.8 | 4 | 0.08 (0.1×) |
+| `3-5-haiku` | 0.8 | 4 | 0.08 (0.1×) |
 | `haiku` | 0.25 | 1.25 | 0.025 (0.1×) |
 | anything else | 3 | 15 | 0.3 (0.1×) |
 
 The `fable-5-1` row matches `claude-fable-5-1` and its dated, `[1m]` and vendor-prefixed variants.
 `claude-fable-5` and its dated ids (`claude-fable-5-2…`) do not match it and fall through to
 `fable`. Claude Mythos 5.1's cache-read rate is unannounced, so it stays at 0.1× until it is announced.
+Claude 3.5 Haiku's id is `claude-3-5-haiku-<date>`, hence `3-5-haiku` (retired Feb 2026).
+
+**Fast mode (A5).** A response whose `usage.speed` is `"fast"` is priced at the row's rates × its
+fast multiplier; cache writes and reads follow the multiplied input. Claude Opus 5 (the `opus-5`
+row): 2×, i.e. $10 in / $50 out. Fast-mode rates for other models (Opus 4.8 also has fast mode) are
+not confirmed, so they are priced at standard (1×) until they are.
 
 User-overridable: if `~/Library/Application Support/Tokenamp/pricing.json` exists it replaces the
 table. It has the same shape: an ordered list of `{match, input, output}` rows, each with an
-optional `cacheRead` (USD per million tokens), and a row matching `*` is the fallback. Write the
-default file on first run, and never rewrite an existing one. Cache reads for a row are priced as
-follows:
+optional `cacheRead` (USD per million tokens) and optional `fastMultiplier`, and a row matching `*`
+is the fallback. Write the default file on first run, and never rewrite an existing one. Cache reads
+for a row are priced as follows:
 
 - A row that gives `cacheRead` uses it.
 - A row without it uses its own `input` × the **built-in cache-read ratio of the model id being
   priced**: 0.1 for every model, and 0.025 for Fable 5.1.
+
+`fastMultiplier` resolves the same way: the row's own value, else the built-in multiplier of the
+model id being priced (2 for Opus 5, 1 otherwise), so a file written before A5 still prices Opus 5
+fast responses at twice its own Opus 5 row.
 
 That second rule keeps a file written before A4 correct. Such a file has no `cacheRead` field, no
 `fable-5-1` row, and a generic `fable` row that catches Fable 5.1. Under the rule it still prices
@@ -432,6 +452,8 @@ upper-cased, remaining number parts joined with `.`).
   the token or any part of it, never send it anywhere except `api.anthropic.com` over HTTPS. Re-read
   the credential before each poll (Claude Code rotates it). If it is expired or the API returns 401,
   report `.authExpired` and retry on the normal schedule — Claude Code refreshes it when next used.
+  A 403 is not expiry and does not fix itself: report `.error("http 403 forbidden")` and back off
+  like any other error (A5).
 - Request: `GET https://api.anthropic.com/api/oauth/usage` with headers
   `Authorization: Bearer <token>`, `anthropic-beta: oauth-2025-04-20`, `Accept: application/json`,
   `User-Agent: Tokenamp/1.0`. 15 s timeout, ephemeral `URLSession`, no cookies, no cache.
@@ -454,7 +476,12 @@ upper-cased, remaining number parts joined with `.`).
   6-digit fractional seconds and may be null. Unknown keys must be ignored; every field optional.
 - Poll schedule: immediately on start; every `livePollInterval` (default 60 s) while there was local
   activity in the last 5 min, else every 300 s; immediately on `refreshNow()`, but never more often
-  than once per 10 s. HTTP 429 → `.rateLimited`, honour `Retry-After`, else exponential backoff to 15 min.
+  than once per 10 s. HTTP 429 → `.rateLimited`, honour `Retry-After` (delta-seconds or HTTP-date,
+  1 s … 6 h), else exponential backoff to 15 min.
+- Reset (A5): once a limit's `resets_at` has passed, publish it at 0 % (severity `normal`) with
+  `resets_at` moved forward by whole windows (`windowSeconds`: 5 h session, 7 d weekly; unknown
+  window → reset unknown) until a fresh reading arrives, and poll 2–6 s (jittered) after the reset,
+  still no sooner than 10 s after the last poll and never inside a 429 wait or error backoff.
 - Order gauges: session, weekly-all, scoped (alphabetical), other.
 
 ### 4.4 usage-dump CLI
