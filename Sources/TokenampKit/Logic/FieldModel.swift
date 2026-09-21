@@ -115,6 +115,20 @@ public struct FieldModulators: Equatable {
         beams = max(1, min(4, s.activeSessionCount))
     }
 
+    /// How long the tail should be for one configuration.
+    ///
+    /// Persistence is a property of a *beam*: it means the display is still showing where the beam
+    /// has been. That earns its keep in SCOPE, WEB and ORBIT, where something genuinely moves
+    /// between frames - the trace scrolls, pulses expand, the arm sweeps. STRATA and PHASE are
+    /// plots: they stand still until the data rolls, and then they jump. A long tail there does
+    /// not draw motion, it smears the jump, so they get a short one and read crisp.
+    public func tail(for mode: FieldMode) -> Double {
+        switch mode {
+        case .strata, .phase: return 0.2
+        case .scope, .web, .orbit: return persistence
+        }
+    }
+
     /// 0 = a steady stream of work, 1 = bursts separated by silence. Measured as the share of the
     /// recent fine buckets that are empty, which is exactly what makes work feel bursty.
     static func burstiness(_ s: UsageSnapshot) -> Double {

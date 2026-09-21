@@ -32,7 +32,7 @@ public enum FieldGeometry {
                             mods: FieldModulators, span: FieldSpan,
                             flows: [String: Double], t: Double, now: Date) -> [FieldLabel] {
         switch mode {
-        case .scope: drawScope(f, s, mods, t); return []
+        case .scope: drawScope(f, s, mods, now); return []
         case .strata: return drawStrata(f, s, mods, span, now)
         case .web: return drawWeb(f, s, mods, flows, t, now)
         case .orbit: return drawOrbit(f, s, mods, t)
@@ -89,7 +89,7 @@ public enum FieldGeometry {
 
     /// The bipolar trace over the last 6 min 20 s: what came out above the axis, what went in
     /// below, and the context that was re-read as a mirrored echo behind both.
-    static func drawScope(_ f: PhosphorField, _ s: UsageSnapshot, _ m: FieldModulators, _ t: Double) {
+    static func drawScope(_ f: PhosphorField, _ s: UsageSnapshot, _ m: FieldModulators, _ now: Date) {
         let w = Double(f.width), h = Double(f.height), cy = h / 2
         let lastColumn = w - 1
         let amp = h / 2 - 10
@@ -113,6 +113,18 @@ public enum FieldGeometry {
         let into = envelope({ Double($0.tokens.input + $0.tokens.cacheWrite) }, 120, 24_000)
         let reread = envelope({ Double($0.tokens.cacheRead) }, 20_000, 1_200_000)
 
+        // How far into the newest 5-second bucket we are. The whole trace slides left by that
+        // fraction of a bucket, so the waveform flows past a beam head pinned at the right edge
+        // instead of standing still and jumping a whole bucket every five seconds - which is what
+        // turns the phosphor tail into a motion trail rather than a smear of the jump.
+        let pitch = lastColumn / Double(n - 1)
+        let roll: Double
+        if let last = fine.last, last.duration > 0 {
+            roll = min(1, max(0, now.timeIntervalSince(last.start) / last.duration)) * pitch
+        } else {
+            roll = 0
+        }
+
         func sample(_ v: [Double], _ u: Double) -> Double {
             let x = u * Double(n - 1)
             let i = min(n - 2, max(0, Int(x)))
@@ -121,7 +133,7 @@ public enum FieldGeometry {
 
         var up: [CGPoint] = [], down: [CGPoint] = []
         for i in 0..<n {
-            let x = lastColumn * Double(i) / Double(n - 1)
+            let x = lastColumn * Double(i) / Double(n - 1) - roll
             let a = reread[i] * amp * 0.95
             up.append(CGPoint(x: x, y: cy - a))
             down.append(CGPoint(x: x, y: cy + a))
@@ -136,9 +148,11 @@ public enum FieldGeometry {
             let share = 1.0 / (1 + 0.55 * Double(m.beams - 1))
             var prev: CGPoint?
             for j in 0...steps {
-                let u = Double(j) / Double(steps)
-                let x = u * (w - 1)
-                let phase = x * 0.78 + Double(k) * 2.1
+                let x = Double(j) / Double(steps) * (w - 1)
+                // Sample the signal where it *is* rather than where it is drawn, and carry the
+                // phase with it, so the whole waveform scrolls as one piece.
+                let u = min(1, max(0, (x + roll) / lastColumn))
+                let phase = (x + roll) * 0.78 + Double(k) * 2.1
                 let carrier = sin(phase) * 0.66 + sin(phase * 2.37 + 1.1) * 0.34
                 let a = carrier >= 0
                     ? carrier * sample(out, u) * amp * share
@@ -152,7 +166,7 @@ public enum FieldGeometry {
             for i in stride(from: k, to: n, by: 4) where fine[i].messages > 0 {
                 let peak = out[i] >= out[max(0, i - 1)] && out[i] >= out[min(n - 1, i + 1)]
                 guard peak else { continue }
-                let x = lastColumn * Double(i) / Double(n - 1)
+                let x = lastColumn * Double(i) / Double(n - 1) - roll
                 f.segment(x, cy - 3, x, cy + 3, 3.0 * m.energy)
             }
         }

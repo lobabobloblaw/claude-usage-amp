@@ -161,10 +161,11 @@ public enum FieldRenderer {
         let mods = FieldModulators(snapshot: snapshot, now: now)
         // Six time constants of the slower (ghost) channel, spread over a fixed frame count.
         let frames = 48
-        let dt = max(1.0 / 30, mods.persistence * 2.2 * 6 / Double(frames))
+        let tail = mods.tail(for: mode)
+        let dt = max(1.0 / 30, tail * 2.2 * 6 / Double(frames))
         var labels: [FieldLabel] = []
         for i in 0..<frames {
-            field.decay(dt: dt, persistence: mods.persistence)
+            field.decay(dt: dt, persistence: tail)
             labels = FieldGeometry.draw(mode, into: field, snapshot: snapshot, mods: mods,
                                         span: span, flows: [:], t: Double(i) * dt, now: now)
         }

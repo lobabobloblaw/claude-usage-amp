@@ -135,7 +135,7 @@ in skin pixels through the skin's own `viscolor.txt`.
 
 | | Draws | Reads |
 |---|---|---|
-| **SCOPE** | Bipolar trace over the last 6 min 20 s: output above the axis, input + cache writes below, cache reads as a mirrored echo behind both. One trace per active session, so parallel work interferes on one axis. Messages punch through as blips; a comet marks `now`. | `fine` |
+| **SCOPE** | Bipolar trace over the last 6 min 20 s, scrolling continuously past a beam head pinned at the right edge (it slides by the fraction of the newest 5 s bucket elapsed, so the tail is a motion trail rather than a smear of a jump every five seconds): output above the axis, input + cache writes below, cache reads as a mirrored echo behind both. One trace per active session, so parallel work interferes on one axis. Messages punch through as blips; a comet marks `now`. | `fine` |
 | **STRATA** | The ledger: one riser per bucket with a tick where each fresh class ends, an outline over the total, cache reads as a ghost behind, and the **pace line** - the rate that lands exactly on the reset without hitting the wall. Span from the context menu or the wheel: last hour / last day / last 10 days. | `minutes`, `hours`, `days` |
 | **WEB** | The connectome: a hub, one node per model in play, one per session today. Node radius by tokens, brightness by recency, a pulse ring while live, edge energy by flow. Active sessions are held near the hub, idle ones drift to the rim. Names are set in the skin's `text.bmp` font. | `sessionsToday` + snapshot diffs |
 | **ORBIT** | The polar wall: angle is position in the limit window, radius is how hard the work was, and the rings *are* the limits - session inside, weekly outside - with the consumed arc filling each. Past 85 % the ring sheds sparks where the arc presses on it. | `limits`, `hours`, `minutes` |
@@ -146,6 +146,11 @@ in skin pixels through the skin's own `viscolor.txt`.
 **energy** (burn rate, faded down by idleness), **persistence** (the phosphor time constant: bursty
 work keeps a long tail, steady work a short one), **echo** (the cache-read layer), **phase**
 (where you are between resets), **beams** (one per active session).
+
+Persistence applies only where something genuinely moves between frames - SCOPE's scroll, WEB's
+pulses, ORBIT's arm. STRATA and PHASE are plots: they stand still until the data rolls and then
+jump, so a long tail there would smear the jump rather than draw motion, and they get a short fixed
+one instead.
 
 **AUTO** (the title-bar lamp, or the context menu) lets the field choose: idle -> ORBIT, or STRATA
 when there is history to read; one steady session -> SCOPE; two or more live -> WEB; a critical

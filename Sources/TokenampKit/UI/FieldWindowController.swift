@@ -91,7 +91,7 @@ public final class FieldWindowController: NSObject, SkinViewDelegate, NSWindowDe
         }
 
         elapsed += dt
-        field.decay(dt: dt, persistence: mods.persistence)
+        field.decay(dt: dt, persistence: mods.tail(for: mode))
         labels = FieldGeometry.draw(mode, into: field, snapshot: snapshot, mods: mods,
                                     span: app.prefs.fieldSpan, flows: app.sessionFlows(now: now),
                                     t: elapsed, now: now)
