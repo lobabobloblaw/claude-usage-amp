@@ -69,6 +69,7 @@ public enum SelfTest {
         eqModel(c)
         docking(c)
         scaleModel(c)
+        windowPositions(c, tmp: tmp)
         playlistGeometry(c)
         tokenFlow(c)
         fontMap(c)

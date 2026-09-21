@@ -27,21 +27,19 @@ public final class SkinWindow: NSWindow {
         tabbingMode = .disallowed
     }
 
-    /// Resize around the top-left corner, which is how a Winamp window grows downwards.
+    /// Resize around the top-left corner, which is how a Winamp window grows downwards. Because
+    /// every resize keeps it, the top-left corner is also what gets persisted (`WindowLayout`).
     public func setSkinSize(_ size: SkinPair, scale: Double) {
         let newSize = ScaleModel.contentSize(skin: size, points: scale)
-        var f = frame
-        f.origin.y = f.maxY - newSize.height
-        f.size = newSize
-        setFrame(f, display: true)
+        setFrame(WindowLayout.resized(frame, to: newSize), display: true)
     }
 
     public var topLeft: CGPoint {
-        CGPoint(x: frame.minX, y: frame.maxY)
+        WindowLayout.topLeft(of: frame)
     }
 
     public func setTopLeft(_ p: CGPoint) {
-        setFrameOrigin(CGPoint(x: p.x, y: p.y - frame.height))
+        setFrameOrigin(WindowLayout.origin(topLeft: p, height: frame.height))
     }
 
     /// Every move goes through here, including drags: quantise to whole device pixels so a skin

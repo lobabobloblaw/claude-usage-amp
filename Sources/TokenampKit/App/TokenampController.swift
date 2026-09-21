@@ -106,6 +106,7 @@ public final class TokenampController: NSObject {
     // MARK: - Lifecycle
 
     public func start() {
+        migrateLegacyWindowPositions()
         scale = resolvedStartScale()
         mainWindow = MainWindowController(app: self)
         equalizer = EqualizerWindowController(app: self)
@@ -118,14 +119,14 @@ public final class TokenampController: NSObject {
         docking.field = field.window
         docking.scale = scale
 
+        // Also applies the stored shade state, before anything is shown.
         restoreWindowPositions()
-        // The stored origin may put the main window on a screen with a different backing factor
+        // The stored corner may put the main window on a screen with a different backing factor
         // than the one we guessed from; honour that screen without touching the preference.
         reconcileScaleWithCurrentScreen()
         applyAlwaysOnTop()
 
         mainWindow.window.makeKeyAndOrderFront(nil)
-        if prefs.shadeMode { mainWindow.setShade(true, persist: false) }
         if prefs.eqOpen { equalizer.show() }
         if prefs.playlistOpen { playlist.show() }
         if prefs.fieldOpen { field.show() }
@@ -404,10 +405,11 @@ public final class TokenampController: NSObject {
         if equalizer.window.isVisible {
             equalizer.hide()
         } else {
-            placeIfUnplaced(equalizer.window, .equalizer)
+            placeForOpening(equalizer.window, .equalizer)
             equalizer.show()
         }
         prefs.eqOpen = equalizer.window.isVisible
+        saveWindowPositions()
         mainWindow.view.needsDisplay = true
     }
 
@@ -417,7 +419,7 @@ public final class TokenampController: NSObject {
             field.hide()
         } else {
             // Place it before it is shown, or a first open flashes at the origin and then jumps.
-            placeIfUnplaced(field.window, .field)
+            placeForOpening(field.window, .field)
             field.settle()
             field.show()
         }
@@ -427,10 +429,14 @@ public final class TokenampController: NSObject {
         setAnimating(true)
     }
 
-    /// A window with no stored origin goes to the foot of the column when it is opened, rather
-    /// than appearing on top of whatever is already there.
-    private func placeIfUnplaced(_ window: SkinWindow, _ key: Preferences.WindowKey) {
-        guard prefs.origin(key) == nil else { return }
+    /// A window with no stored corner goes to the foot of the column when it is opened, rather
+    /// than appearing on top of whatever is already there. So does one whose stored place is on
+    /// no screen any more (it was parked on a display that has since been unplugged), or it
+    /// would open where nobody can see it.
+    private func placeForOpening(_ window: SkinWindow, _ key: Preferences.WindowKey) {
+        let screens = NSScreen.screens.map { $0.visibleFrame }
+        guard WindowLayout.needsPlacementOnOpen(isPlaced: prefs.topLeft(key) != nil,
+                                                frame: window.frame, screens: screens) else { return }
         docking.placeBelowColumn(window)
     }
 
@@ -448,10 +454,11 @@ public final class TokenampController: NSObject {
         if playlist.window.isVisible {
             playlist.hide()
         } else {
-            placeIfUnplaced(playlist.window, .playlist)
+            placeForOpening(playlist.window, .playlist)
             playlist.show()
         }
         prefs.playlistOpen = playlist.window.isVisible
+        saveWindowPositions()
         mainWindow.view.needsDisplay = true
     }
 
@@ -470,16 +477,20 @@ public final class TokenampController: NSObject {
     }
 
     /// The screen the main window will land on before it exists: the one holding the stored
-    /// origin, else the main screen.
+    /// corner, else the main screen.
     private func startupScreen() -> NSScreen? {
-        if let origin = prefs.origin(.main) {
-            if let s = NSScreen.screens.first(where: { $0.frame.contains(origin) }) { return s }
+        if let corner = prefs.topLeft(.main) {
+            let probe = WindowLayout.probePoint(topLeft: corner)
+            if let s = NSScreen.screens.first(where: { $0.frame.contains(probe) }) { return s }
         }
         return NSScreen.main
     }
 
     private func resolvedStartScale() -> Double {
-        let screen = startupScreen()
+        startScale(on: startupScreen())
+    }
+
+    private func startScale(on screen: NSScreen?) -> Double {
         let backing = screen?.backingScaleFactor ?? 1
         let visible = screen?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
         let wanted = prefs.hasStoredScale
@@ -694,62 +705,88 @@ public final class TokenampController: NSObject {
     /// saved (0, 0) then survives every future launch.
     private var isRestoringLayout = false
 
+    /// Positions are stored as top-left corners (`WindowLayout`): every resize keeps a window's
+    /// top-left fixed, so a corner saved from the 14-px shade strip, a short Sessions window or
+    /// another scale still puts the window back exactly where it was.
     private func restoreWindowPositions() {
         isRestoringLayout = true
         defer { isRestoringLayout = false }
-        // The main window's origin is what says a layout was ever saved; without it everything
-        // goes to the default column. Individual windows may still be missing one (the equalizer
-        // starts closed and may never have been opened), and those keep their default place.
-        if let m = prefs.origin(.main) {
-            docking.applyDefaultLayout()
-            mainWindow.window.setFrameOrigin(m)
-            if let e = prefs.origin(.equalizer) { equalizer.window.setFrameOrigin(e) }
-            if let p = prefs.origin(.playlist) { playlist.window.setFrameOrigin(p) }
-        } else {
-            docking.applyDefaultLayout()
+        // Everything starts in the default column; stored corners then override it window by
+        // window. A window with no corner (the equalizer starts closed and may never have been
+        // opened) keeps its default slot.
+        docking.applyDefaultLayout()
+        // The main window's corner is what says a layout was ever saved; without it the default
+        // column stands.
+        if let m = prefs.topLeft(.main) {
+            mainWindow.window.setTopLeft(m)
+            if let e = prefs.topLeft(.equalizer) { equalizer.window.setTopLeft(e) }
+            if let p = prefs.topLeft(.playlist) { playlist.window.setTopLeft(p) }
+            if let f = prefs.topLeft(.field) { field.window.setTopLeft(f) }
         }
-        // Token Flow is part of the default column, so it is already placed when nothing was
-        // stored; this restores it when the other three were stored without it.
-        if let f = prefs.origin(.field) { field.window.setFrameOrigin(f) }
+        // Shade keeps the top-left corner, so it can follow the placement. It must come before
+        // the on-screen check, which has to judge the strip, not the full-height window. Nothing
+        // is visible yet, so it moves no other window and saves nothing.
+        if prefs.shadeMode { mainWindow.setShade(true, persist: false) }
         clampOnScreen()
     }
 
     public func saveWindowPositions() {
         guard !isRestoringLayout, let mainWindow else { return }
-        prefs.setOrigin(mainWindow.window.frame.origin, for: .main)
-        if let eq = equalizer, eq.window.isVisible { prefs.setOrigin(eq.window.frame.origin, for: .equalizer) }
-        if let pl = playlist, pl.window.isVisible { prefs.setOrigin(pl.window.frame.origin, for: .playlist) }
-        if let f = field, f.isVisible { prefs.setOrigin(f.window.frame.origin, for: .field) }
+        prefs.setTopLeft(mainWindow.window.topLeft, for: .main)
+        // A closed window is saved too once it has a place of its own: its corner does not change
+        // while it is hidden, except when a rescue carries it along, and that must stick. One
+        // that was never placed stays unstored, so its first opening puts it at the foot of the
+        // column (SPEC 2.7).
+        let others: [(SkinWindow?, Preferences.WindowKey)] = [(equalizer?.window, .equalizer),
+                                                              (playlist?.window, .playlist),
+                                                              (field?.window, .field)]
+        for case let (window?, key) in others where window.isVisible || prefs.topLeft(key) != nil {
+            prefs.setTopLeft(window.topLeft, for: key)
+        }
     }
 
-    /// Put the group back on a screen if a display was unplugged or rearranged since the positions
-    /// were saved.
+    /// Put the layout back on a screen if a display was unplugged or rearranged since it was
+    /// saved. The decision is `WindowLayout.rescue`; this only gathers the facts.
     ///
-    /// Two things matter here. A window counts as on-screen when it intersects *any* screen, not
-    /// just `NSScreen.main` - otherwise a perfectly good layout on a second display gets yanked
-    /// across the moment the primary display changes. And the whole group is moved by one shared
-    /// delta, so a rescue never scatters windows that were docked together.
+    /// It runs before any window is shown, so what is open comes from the preferences, not from
+    /// `isVisible`: the equalizer counts only when it will open (its default slot is on the
+    /// built-in screen and would otherwise make a lost stack look reachable), and Token Flow counts
+    /// - and moves with the group - when it will.
     private func clampOnScreen() {
-        // Only windows that are actually on screen count: a Token Flow window that has never
-        // been opened is still sitting at its birth origin and would make the group look rescued.
-        let windows = [mainWindow?.window, equalizer?.window, playlist?.window,
-                       field?.isVisible == true ? field?.window : nil].compactMap { $0 }
-        guard !windows.isEmpty else { return }
+        guard let mainWindow, let equalizer, let playlist, let field else { return }
+        func placed(_ w: SkinWindow, _ key: Preferences.WindowKey) -> Bool {
+            w.isVisible || prefs.topLeft(key) != nil
+        }
+        // Without a placed main window everything is in the default column: nothing to rescue.
+        guard placed(mainWindow.window, .main) else { return }
+        let windows: [SkinWindow] = [mainWindow.window, equalizer.window, playlist.window, field.window]
+        let slots = [
+            WindowLayout.Slot(frame: mainWindow.window.frame, isOpen: true, isPlaced: true),
+            WindowLayout.Slot(frame: equalizer.window.frame, isOpen: prefs.eqOpen,
+                              isPlaced: placed(equalizer.window, .equalizer)),
+            WindowLayout.Slot(frame: playlist.window.frame, isOpen: prefs.playlistOpen,
+                              isPlaced: placed(playlist.window, .playlist)),
+            WindowLayout.Slot(frame: field.window.frame, isOpen: prefs.fieldOpen,
+                              isPlaced: placed(field.window, .field)),
+        ]
         let screens = NSScreen.screens.map { $0.visibleFrame }
-        guard let home = (NSScreen.main ?? NSScreen.screens.first)?.visibleFrame else { return }
-
-        func isOnScreen(_ f: CGRect) -> Bool {
-            screens.contains { $0.intersects(f.insetBy(dx: -1, dy: -1)) }
+        guard let home = (NSScreen.main ?? NSScreen.screens.first)?.visibleFrame,
+              let rescue = WindowLayout.rescue(slots, screens: screens, home: home) else { return }
+        for i in rescue.moves {
+            let w = windows[i]
+            w.setFrameOrigin(CGPoint(x: w.frame.minX + rescue.offset.dx, y: w.frame.minY + rescue.offset.dy))
         }
-        // Only step in when *nothing* is reachable; a partly off-screen stack is the user's choice.
-        guard !windows.contains(where: { isOnScreen($0.frame) }) else { return }
+    }
 
-        let anchor = mainWindow?.window.frame ?? windows[0].frame
-        let target = CGPoint(x: home.minX + 40, y: home.maxY - anchor.height - 40)
-        let delta = CGPoint(x: target.x - anchor.minX, y: target.y - anchor.minY)
-        for w in windows {
-            w.setFrameOrigin(CGPoint(x: w.frame.minX + delta.x, y: w.frame.minY + delta.y))
-        }
+    /// Builds before top-left corners stored bottom-left origins. Convert them once, at the scale
+    /// they were saved at: the one the last launch resolved, by the same rule, on the screen that
+    /// holds the old main-window origin. The layout then comes back exactly where it was.
+    private func migrateLegacyWindowPositions() {
+        guard prefs.hasLegacyOriginsToMigrate else { return }
+        let screen = prefs.legacyOrigin(.main).flatMap { origin in
+            NSScreen.screens.first(where: { $0.frame.contains(origin) })
+        } ?? NSScreen.main
+        prefs.migrateLegacyOrigins(scale: startScale(on: screen), shaded: prefs.shadeMode)
     }
 
     // MARK: - Menu

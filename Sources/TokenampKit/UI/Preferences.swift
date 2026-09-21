@@ -45,6 +45,15 @@ public final class Preferences {
     private enum K {
         static let skinPath = "skinPath"
         static let scale = "scale"
+        // Window positions: top-left corners, "x,y" in screen points (see `WindowLayout`).
+        static let mainTopLeft = "mainTopLeft"
+        static let eqTopLeft = "eqTopLeft"
+        static let plTopLeft = "plTopLeft"
+        static let fieldTopLeft = "fieldTopLeft"
+        // Bottom-left origins written by earlier builds. Read once, by the migration, and never
+        // written again; they are left in place so an older build still finds its own layout.
+        // New keys rather than a reinterpretation of these, because an older build reading a
+        // corner as an origin would drop every window by its own height.
         static let mainOrigin = "mainOrigin"
         static let eqOrigin = "eqOrigin"
         static let plOrigin = "plOrigin"
@@ -164,20 +173,72 @@ public final class Preferences {
         set { defaults.set(newValue, forKey: K.playlistHeight) }
     }
 
-    public func origin(_ which: WindowKey) -> CGPoint? {
-        guard let s = defaults.string(forKey: which.key) else { return nil }
+    /// A window's stored top-left corner, in screen points. Every resize keeps a window's top-left
+    /// fixed, so this is valid whatever size the window has when it is restored (shaded or not,
+    /// any Sessions height or scale).
+    public func topLeft(_ which: WindowKey) -> CGPoint? {
+        point(forKey: which.key)
+    }
+
+    public func setTopLeft(_ p: CGPoint, for which: WindowKey) {
+        defaults.set("\(p.x),\(p.y)", forKey: which.key)
+    }
+
+    /// The bottom-left origin an earlier build stored, if any.
+    public func legacyOrigin(_ which: WindowKey) -> CGPoint? {
+        point(forKey: which.legacyKey)
+    }
+
+    private func point(forKey key: String) -> CGPoint? {
+        guard let s = defaults.string(forKey: key) else { return nil }
         let parts = s.split(separator: ",").compactMap { Double($0) }
         guard parts.count == 2 else { return nil }
         return CGPoint(x: parts[0], y: parts[1])
     }
 
-    public func setOrigin(_ p: CGPoint, for which: WindowKey) {
-        defaults.set("\(p.x),\(p.y)", forKey: which.key)
+    /// True while some window still has only an old-style origin.
+    public var hasLegacyOriginsToMigrate: Bool {
+        WindowKey.allCases.contains { topLeft($0) == nil && legacyOrigin($0) != nil }
     }
 
-    public enum WindowKey {
+    /// One-time conversion of the bottom-left origins earlier builds stored into top-left corners.
+    ///
+    /// Each origin was taken at the window's size when it was saved: the main window at full or
+    /// shade height depending on `shaded` (the shade state is persisted on every toggle, so the
+    /// stored shade state is the one the origin was saved in), Sessions and Token Flow at their
+    /// stored heights, all at `scale` - the scale the last launch ran at. A window that already
+    /// has a corner is left alone, which is what makes this run once.
+    public func migrateLegacyOrigins(scale: Double, shaded: Bool) {
+        for key in WindowKey.allCases {
+            guard topLeft(key) == nil, let origin = legacyOrigin(key) else { continue }
+            let corner = WindowLayout.migratedTopLeft(legacyOrigin: origin,
+                                                      skinHeight: skinHeight(key, shaded: shaded),
+                                                      scale: scale)
+            setTopLeft(corner, for: key)
+        }
+    }
+
+    /// A window's height in skin pixels, as the stored preferences size it.
+    public func skinHeight(_ which: WindowKey, shaded: Bool) -> Int {
+        switch which {
+        case .main: return WindowLayout.mainSkinHeight(shaded: shaded)
+        case .equalizer: return Layout.EQ.size.h
+        case .playlist: return playlistHeight
+        case .field: return fieldHeight
+        }
+    }
+
+    public enum WindowKey: CaseIterable {
         case main, equalizer, playlist, field
         var key: String {
+            switch self {
+            case .main: return K.mainTopLeft
+            case .equalizer: return K.eqTopLeft
+            case .playlist: return K.plTopLeft
+            case .field: return K.fieldTopLeft
+            }
+        }
+        var legacyKey: String {
             switch self {
             case .main: return K.mainOrigin
             case .equalizer: return K.eqOrigin
