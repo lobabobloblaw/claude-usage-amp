@@ -46,16 +46,17 @@ def glass_rows(c, x, y, w, h):
 
 
 def crt_glass(c, x, y, w, h, r: int = 3, gasket: int = 1, vignette: float = 1.0,
-              depth: int = 3):
+              depth: int = 3, lip_bottom: bool = True):
     """A tube face behind a rubber gasket.  (x, y, w, h) is the glass itself.
-    Returns the canvas-sized bool mask of the glass."""
+    ``lip_bottom=False`` leaves the casting bare under the gasket (room for a
+    legend there).  Returns the canvas-sized bool mask of the glass."""
     gx, gy, gw, gh = x - gasket, y - gasket, w + 2 * gasket, h + 2 * gasket
     # the gasket: rubber ring; its top/left limbs sit in shadow, bottom/right catch light
     gm = M.full_mask(c, gx, gy, gw, gh, r=min(4, r + 1))
     glass = M.full_mask(c, x, y, w, h, r=r)
     # the wall of the aperture, one pixel outside the gasket: the top/left wall
     # is in its own shadow, the bottom/right wall faces the light
-    M.sink_mask(c, gm, depth=0, a_sh=0.0, a_lip=0.55)
+    M.sink_mask(c, gm, depth=0, a_sh=0.0, a_lip=0.55, lip_bottom=lip_bottom)
     ring = gm & ~glass
     M.fill_mask(c, ring, P.RUBBER[2])
     yy, xx = np.mgrid[0:c.h, 0:c.w]
@@ -379,18 +380,24 @@ def ladder_colour(f: float):
     return P.RED
 
 
-def led_ladder(c, i: int, label: str, n_frames: int = 28, seed: int = 0):
+def led_ladder(c, i: int, n_frames: int = 28, seed: int = 0):
     """Horizontal segmented LED ladder behind smoked glass with a silk-screened
-    ruler and legend under it.  Frame ``i`` lights segments left -> right; the
-    leading segment comes up in three steps so all 28 frames are distinct."""
+    ruler under it.  Frame ``i`` lights segments left -> right; the leading
+    segment comes up in three steps so all 28 frames are distinct.
+
+    The knob rides rows 1..11 of the frame across the whole width, so nothing
+    that must stay readable (the SESSION / WEEK legend) can live in here: the
+    legends are stencilled on the casting lip above the ladders instead
+    (``bh_main._paint_gauge_bay``)."""
     w, h = c.w, c.h
-    # recess for the smoked window: rows 0..6
-    M.box(c, 0, 0, w, 7, P.GUN[0])
-    M.box(c, 1, 1, w - 2, 5, (9, 10, 11))
-    M.hl(c, 0, w - 1, 0, P.SHADOW, 0.9)
+    # recess for the smoked window: rows 1..6.  Row 0 stays casting (the
+    # knob never reaches it), a clear row between the window and the legend.
+    M.box(c, 0, 1, w, 6, P.GUN[0])
+    M.box(c, 1, 2, w - 2, 4, (9, 10, 11))
+    M.hl(c, 0, w - 1, 1, P.SHADOW, 0.9)
     M.hl(c, 1, w - 2, 6, P.GUN[5], 0.75)               # lit lower lip
-    M.vl(c, w - 1, 1, 6, P.GUN[5], 0.5)
-    M.vl(c, 0, 0, 6, P.SHADOW, 0.85)
+    M.vl(c, w - 1, 2, 6, P.GUN[5], 0.5)
+    M.vl(c, 0, 1, 6, P.SHADOW, 0.85)
     nseg = (w - 4) // 3
     x0 = 2 + ((w - 4) - nseg * 3 + 1) // 2
     level = i / (n_frames - 1) * nseg
@@ -436,15 +443,11 @@ def led_ladder(c, i: int, label: str, n_frames: int = 28, seed: int = 0):
         M.hl(c, x0, x0 + (last_lit + 1) * 3 - 2, 6, ramp[3], 0.25)   # glow on the lip
     # smoked-glass reflection: a thin cool glint along the top of the window
     M.hl(c, 2, w // 3, 1, (150, 170, 180), 0.10)
-    # label strip: ruler ticks at the left, legend hard right (clear of the knob
-    # for every reading below the amber zone)
-    lw = T.MICRO.width(label)
-    lx = w - 2 - lw
-    T.draw(c, lx + 1, 9, label, T.MICRO, P.SHADOW, a=0.55)
-    T.draw(c, lx, 8, label, T.MICRO, P.LEGEND[3], a=0.95)
+    # ruler strip: a tick under every segment gap, a long tick every fifth,
+    # inked in the zone colour of the segments above it
     for k in range(nseg + 1):
         tx = x0 + k * 3 - 1
-        if tx >= lx - 2:
+        if tx > w - 2:
             break
         f = k / max(1, nseg)
         col = P.LEGEND[2] if f < 0.56 else (P.LAMP_AMBER[4] if f < 0.8 else P.RED[4])

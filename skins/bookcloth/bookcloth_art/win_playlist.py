@@ -165,15 +165,18 @@ class PlaylistMixin:
         self._pl_bottom(p)
         p.vline(0, H - BOT_H, H - 1, P.CLAY_LIGHT, 0.45)
         p.px(0, H - 1, P.CLAY_PALE, 0.70)
-        # the colophon: a pasted label, ruled and signed
-        lx, ly, lw, lh = 12, H - BOT_H + 6, 100, 25
+        # the colophon: a pasted label, ruled and signed.  27 rows, the same
+        # as the slip on the right, so the two cards share their edges and
+        # every line gets a clear row: heading 2..6, underline 8..10, the two
+        # body lines 12..16 and 19..23, and a row of paper above the cut edge.
+        lx, ly, lw, lh = 12, H - BOT_H + 6, 100, 27
         M.soft_shadow(p, lx, ly, lw, lh, P.SHADOW_ON_CLOTH, strength=0.45,
                       spread=1, dx=2, dy=2)
         M.card(p, lx, ly, lw, lh, window="playlist", on="cloth", tone="manilla",
                notch=True)
-        T.letterpress(p, lx + 5, ly + 4, "SESSIONS", "micro", ink=P.INK_BODY)
-        D.wobble_line(p, lx + 5, lx + 44, ly + 11, P.CLAY_DEEP, a=0.8, seed=5)
-        T.letterpress(p, lx + 5, ly + 13, "A LEDGER OF", "micro", ink=P.INK_SOFT)
+        T.letterpress(p, lx + 5, ly + 2, "SESSIONS", "micro", ink=P.INK_BODY)
+        D.wobble_line(p, lx + 5, lx + 44, ly + 9, P.CLAY_DEEP, a=0.8, seed=5)
+        T.letterpress(p, lx + 5, ly + 12, "A LEDGER OF", "micro", ink=P.INK_SOFT)
         T.letterpress(p, lx + 5, ly + 19, "TOKENS SPENT", "micro", ink=P.INK_SOFT)
         D.spark(p, lx + 86, ly + 15, 9, P.CLAY_DEEP, 0.9)
         p.opaque()

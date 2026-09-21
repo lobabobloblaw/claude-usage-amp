@@ -660,11 +660,15 @@ def raise_mask(c, mask, a_hi: float = 0.5, a_lo: float = 0.6, contact: int = 2,
     blend_mask(c, lom, lo)
 
 
-def sink_mask(c, mask, depth: int = 2, a_sh: float = 0.7, a_lip: float = 0.35):
+def sink_mask(c, mask, depth: int = 2, a_sh: float = 0.7, a_lip: float = 0.35,
+              lip_bottom: bool = True):
     """Relief for a hole of arbitrary shape: inner shadow falling in from the
-    top/left, lit lip just outside the bottom/right edge."""
+    top/left, lit lip just outside the bottom/right edge (``lip_bottom=False``
+    keeps only the right-hand lip, for a hole with a legend right under it)."""
     inside = mask
     lip_b = ~inside & _shift(inside, 0, 1)
+    if not lip_bottom:
+        lip_b[:] = False
     lip_r = ~inside & _shift(inside, 1, 0)
     edge_t = ~inside & _shift(inside, 0, -1)
     edge_l = ~inside & _shift(inside, -1, 0)

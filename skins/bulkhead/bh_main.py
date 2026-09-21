@@ -13,10 +13,11 @@ import bh_type as T
 # ---- geometry (window coords) ---------------------------------------------
 BAND = (2, 14, 17, 57)            # chipped orange paint band behind the clutterbar
 CAST_L = (19, 14, 88, 51)         # casting, left limb: main tube     x19..106 y14..64
-CAST_R = (107, 14, 165, 42)       # casting, right limb: strip+data   x107..271 y14..55
+CAST_R = (107, 14, 165, 45)       # casting, right limb: strip+data   x107..271 y14..58
 GLASS_A = (23, 22, 78, 40)        # main tube                         x23..100 y22..61
 GLASS_B = (108, 22, 160, 14)      # message strip                     x108..267 y22..35
-GLASS_C = (108, 40, 102, 12)      # data tube                         x108..209 y40..51
+GLASS_C = (108, 40, 102, 10)      # data tube                         x108..209 y40..49
+LEGEND_Y = 52                     # SESSION / WEEK stencils on the casting lip, y52..56
 TRAY_T = (14, 86, 146, 21)        # transport tray                    x14..159 y86..106
 TRAY_S = (162, 87, 78, 19)        # cycle/alert tray                  x162..239 y87..105
 STRAP_Y = 107
@@ -102,7 +103,7 @@ class MainMixin:
 
         ga = X.crt_glass(c, *GLASS_A, r=3, depth=3)
         gb = X.crt_glass(c, *GLASS_B, r=2, depth=2)
-        gc = X.crt_glass(c, *GLASS_C, r=2, depth=2)
+        gc = X.crt_glass(c, *GLASS_C, r=2, depth=2, lip_bottom=False)   # legends below
         glass = ga | gb | gc
         keep = _keepout(c)
 
@@ -175,11 +176,28 @@ class MainMixin:
 
     # -- gauge bay (volume / balance / EQ / PL row) -------------------------
     def _paint_gauge_bay(self, c):
+        # SESSION / WEEK stencilled on the casting lip straight above each
+        # ladder -- out of the knob's travel, which spans the whole frame
+        self._gauge_legend(c, 107, 68, "SESSION")
+        self._gauge_legend(c, 177, 38, "WEEK")
         # engraved rule tying the two ladders together, with end ticks
         M.hl(c, 107, 214, 70, P.SHADOW, 0.45)
         M.hl(c, 107, 214, 71, P.HILITE, 0.14)
         M.vl(c, 175, 58, 69, P.SHADOW, 0.35)
         M.vl(c, 176, 58, 69, P.HILITE, 0.12)
+
+    def _gauge_legend(self, c, gx, gw, text):
+        """Silk-screened legend over a ladder, in the same flat ink as the top
+        rail's designators: the word starts over the first segment, then a
+        bracket line runs to the ladder's far end and drops a tick toward its
+        window, so the word owns the whole run.  Row LEGEND_Y + 5 stays bare
+        casting: air between the legend and the window rim."""
+        y = LEGEND_Y
+        x1 = silk(c, gx + 2, y, text, P.LEGEND[3], a=0.92)
+        bx0, bx1 = x1 + 2, gx + gw - 3
+        if bx1 - bx0 >= 3:
+            M.hl(c, bx0, bx1, y + 2, P.LEGEND[2], 0.75)
+            M.vl(c, bx1, y + 3, y + 4, P.LEGEND[2], 0.75)
 
     # -- lower deck -----------------------------------------------------------
     def _paint_lower_deck(self, c):
@@ -478,10 +496,10 @@ class MainMixin:
     # volume / balance
     # ------------------------------------------------------------------
     def paint_volume_frame(self, c, i):
-        X.led_ladder(c, i, "SESSION", seed=self.seed + 1)
+        X.led_ladder(c, i, seed=self.seed + 1)
 
     def paint_balance_frame(self, c, i):
-        X.led_ladder(c, i, "WEEK", seed=self.seed + 2)
+        X.led_ladder(c, i, seed=self.seed + 2)
 
     def paint_volume_thumb(self, c, pressed):
         X.knob(c, pressed, seed=self.seed + 8)

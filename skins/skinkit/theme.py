@@ -392,8 +392,10 @@ class Theme:
         gy = int(glyphs[0][1])
         c.rect(gx0 - 1, gy - 2, (gx1 - gx0) + 2, 10, self.well_rim)
         c.sub(gx0, gy - 1, gx1 - gx0, 8).fill(self.text_background())
-        c.box(int(glyphs[1][0]) + 6, gy + 2, 1, 1, self.text_fg)
-        c.box(int(glyphs[1][0]) + 6, gy + 4, 1, 1, self.text_fg)
+        # colon centred in the 3 free columns between the minute glyph's ink
+        # (glyph col 4 is its gap) and the next glyph: glyphs[1].x + 5
+        c.box(int(glyphs[1][0]) + 5, gy + 2, 1, 1, self.text_fg)
+        c.box(int(glyphs[1][0]) + 5, gy + 4, 1, 1, self.text_fg)
         # mini transport icons, baked (the shade strip has no button sprites)
         col = self.icon_dim
         for key, draw in (("previous", "prev"), ("play", "play"), ("pause", "pause"),

@@ -285,13 +285,15 @@ class MainWindow:
         for key in ("previous", "play", "pause", "stop", "next", "eject"):
             self._mini_icon(c, lrect("shade", key), key, icol)
         c.vline(166, 4, 9, ghost)
-        # a short engraved tab at the left of the rail
-        s = c.sub(36, 3, 33, 8)
+        # a short engraved name tab at the left of the rail, sized to the
+        # 34-px mark: 2 px of walnut left clear between it and the pilot
+        # jewel (x25..29) and between it and the glass bezel (x75)
+        s = c.sub(33, 3, 39, 8)
         M.aluminium(s, seed=9, level=0.64 if active else 0.42, sheen=0.5)
-        c.rect(35, 2, 35, 10, P.WALNUT[0])
+        c.rect(32, 2, 41, 10, P.WALNUT[0])
         s.hline(0, s.w - 1, 0, P.ALU[6] if active else P.ALU[4])
         s.hline(0, s.w - 1, s.h - 1, P.ALU[1])
-        K.engrave(s, 3, 1, "TOKENAMP", TINY, ink=P.INK if active else "#4a4438",
+        K.engrave(s, 2, 1, "TOKENAMP", TINY, ink=P.INK if active else "#4a4438",
                   lip=100 if active else 30)
 
     def _mini_icon(self, c: Canvas, r: Rect, kind: str, colour) -> None:

@@ -200,8 +200,10 @@ class PlaylistWindow:
             c.px(vx, yy + 1, P.ALU[0])
         # maker's plate.  66 wide so the serif wordmark (59 px) clears the
         # chrome ring with a margin either side; the right edge stays at 116
-        # so the two fasteners beside it do not move.
-        px_, py_, pw, ph = 50, 7, 66, 24
+        # so the two fasteners beside it do not move.  26 tall so every line
+        # keeps a clear row: wordmark 2..8, rule 10, model line 12..16,
+        # serial 18..22, and row 23 between the serial and the ring.
+        px_, py_, pw, ph = 50, 6, 66, 26
         M.chrome_ring(c, px_, py_, pw, ph, glints=False)
         c.px(px_, py_, P.CHROME[3])
         c.px(px_ + 1, py_, P.CHROME[3])
@@ -214,7 +216,7 @@ class PlaylistWindow:
         # model right, caption left: they share the line, so keep them apart
         fonts.draw_text(plate, 4, 12, "SESSION", TINY, P.CREAM_DIM)
         fonts.draw_text(plate, plate.w - 4 - K.tw("TA-76P", TINY), 12, "TA-76P", TINY, P.PILOT[2])
-        fonts.draw_text(plate, 4, 17, "SER 076-0412", TINY, P.CREAM_DIM)
+        fonts.draw_text(plate, 4, 18, "SER 076-0412", TINY, P.CREAM_DIM)
         for rx, ry in ((2, plate.h - 3), (plate.w - 3, plate.h - 3)):
             plate.px(rx, ry, P.CHROME[2])
         M.shade_box(c, px_ + 1, py_ + ph, pw, 1, 0.80)

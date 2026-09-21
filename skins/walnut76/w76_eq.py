@@ -70,10 +70,13 @@ class EqWindow:
         for i in range(int(bands["count"])):
             cx = bx0 + int(bands["strideX"]) * i + int(bands["w"]) // 2
             K.engrave_c(c, cx, by + bh + 3, EQ_CAPTIONS[i], TINY)
-        # legend row
-        K.engrave(c, 56, 109, "TEN BAND USAGE EQUALIZER", TINY)
-        K.engrave(c, 172, 109, "·", TINY)
-        K.engrave(c, 178, 109, "MODEL TA-76E", TINY)
+        # model mark engraved beside the lower-left screw, centred on it and
+        # 3 px clear of its ring, in the pocket before the first band caption.
+        # The band captions own rows 104..108 right across the bay, so a full
+        # legend line under them would have no air (and the title already
+        # says USAGE EQUALIZER).
+        sx, sy, _ = self.EQ_SCREWS[4]
+        K.engrave(c, sx + 2 + 4, sy - 2, "TA-76E", TINY)
         # captions by the curve window
         K.engrave(c, 76, 18, "+", TINY)
         K.engrave(c, 77, 30, "-", TINY)
