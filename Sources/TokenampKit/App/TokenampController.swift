@@ -401,7 +401,12 @@ public final class TokenampController: NSObject {
     }
 
     public func toggleEqualizer() {
-        if equalizer.window.isVisible { equalizer.hide() } else { equalizer.show() }
+        if equalizer.window.isVisible {
+            equalizer.hide()
+        } else {
+            placeIfUnplaced(equalizer.window, .equalizer)
+            equalizer.show()
+        }
         prefs.eqOpen = equalizer.window.isVisible
         mainWindow.view.needsDisplay = true
     }
@@ -412,7 +417,7 @@ public final class TokenampController: NSObject {
             field.hide()
         } else {
             // Place it before it is shown, or a first open flashes at the origin and then jumps.
-            placeFieldIfUnplaced()
+            placeIfUnplaced(field.window, .field)
             field.settle()
             field.show()
         }
@@ -422,10 +427,11 @@ public final class TokenampController: NSObject {
         setAnimating(true)
     }
 
-    /// A window with no stored origin goes to its default home beside the main window.
-    private func placeFieldIfUnplaced() {
-        guard prefs.origin(.field) == nil else { return }
-        docking.placeFieldBesideMain()
+    /// A window with no stored origin goes to the foot of the column when it is opened, rather
+    /// than appearing on top of whatever is already there.
+    private func placeIfUnplaced(_ window: SkinWindow, _ key: Preferences.WindowKey) {
+        guard prefs.origin(key) == nil else { return }
+        docking.placeBelowColumn(window)
     }
 
     /// Flow per session id for the connectome, 0...1.
@@ -439,7 +445,12 @@ public final class TokenampController: NSObject {
     }
 
     public func togglePlaylist() {
-        if playlist.window.isVisible { playlist.hide() } else { playlist.show() }
+        if playlist.window.isVisible {
+            playlist.hide()
+        } else {
+            placeIfUnplaced(playlist.window, .playlist)
+            playlist.show()
+        }
         prefs.playlistOpen = playlist.window.isVisible
         mainWindow.view.needsDisplay = true
     }
@@ -686,29 +697,28 @@ public final class TokenampController: NSObject {
     private func restoreWindowPositions() {
         isRestoringLayout = true
         defer { isRestoringLayout = false }
-        // All three origins or none: a half-restored layout scatters the group.
-        if let m = prefs.origin(.main), let e = prefs.origin(.equalizer), let p = prefs.origin(.playlist) {
+        // The main window's origin is what says a layout was ever saved; without it everything
+        // goes to the default column. Individual windows may still be missing one (the equalizer
+        // starts closed and may never have been opened), and those keep their default place.
+        if let m = prefs.origin(.main) {
+            docking.applyDefaultLayout()
             mainWindow.window.setFrameOrigin(m)
-            equalizer.window.setFrameOrigin(e)
-            playlist.window.setFrameOrigin(p)
+            if let e = prefs.origin(.equalizer) { equalizer.window.setFrameOrigin(e) }
+            if let p = prefs.origin(.playlist) { playlist.window.setFrameOrigin(p) }
         } else {
             docking.applyDefaultLayout()
         }
-        // Token Flow restores on its own, and gets its default home when it has none - which is
-        // every launch before it had ever been opened, not just a first run.
-        if let f = prefs.origin(.field) {
-            field.window.setFrameOrigin(f)
-        } else {
-            docking.placeFieldBesideMain()
-        }
+        // Token Flow is part of the default column, so it is already placed when nothing was
+        // stored; this restores it when the other three were stored without it.
+        if let f = prefs.origin(.field) { field.window.setFrameOrigin(f) }
         clampOnScreen()
     }
 
     public func saveWindowPositions() {
         guard !isRestoringLayout, let mainWindow else { return }
         prefs.setOrigin(mainWindow.window.frame.origin, for: .main)
-        if let eq = equalizer { prefs.setOrigin(eq.window.frame.origin, for: .equalizer) }
-        if let pl = playlist { prefs.setOrigin(pl.window.frame.origin, for: .playlist) }
+        if let eq = equalizer, eq.window.isVisible { prefs.setOrigin(eq.window.frame.origin, for: .equalizer) }
+        if let pl = playlist, pl.window.isVisible { prefs.setOrigin(pl.window.frame.origin, for: .playlist) }
         if let f = field, f.isVisible { prefs.setOrigin(f.window.frame.origin, for: .field) }
     }
 

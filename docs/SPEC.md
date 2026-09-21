@@ -92,7 +92,7 @@ mini visualizer 38×5 (19 bars × 2 px from the same data, single colour = visco
 height scaled to 5 rows); hit zones for the mini transport buttons; options/minimise/shade/close.
 A shaded, always-on-top strip is the app's "glanceable" form, so it must work well.
 
-### 2.3 Equalizer window (275×116) — "Usage Equalizer"
+### 2.3 Equalizer window (275×116) — "Usage Equalizer" (closed by default)
 
 - 10 band sliders = the last 10 time buckets, oldest left, newest right. Range is chosen from the
   PRESETS button popup: **Last 10 hours** (default) / **Last 10 days** / **Last 10 minutes**, and the
@@ -105,6 +105,9 @@ A shaded, always-on-top strip is the app's "glanceable" form, so it must work we
   `EQ_GRAPH_LINE_COLORS` row y; preamp level drawn with `EQ_PREAMP_LINE`.
 - Sliders are read-only gauges; hovering shows `T-3H: 1.24M TOK  $4.10` style readings in the main marquee.
 - Title bar drag, close button hides the window.
+- **Closed on a first run**, and opened from the main window's EQ button or Windows ▸ Equalizer:
+  every slider here is a read-only gauge, so unlike the other three windows it earns its place on
+  screen only when it is asked for.
 
 ### 2.4 Playlist window (275×232 default, vertical resize in 29 px steps) — "Sessions"
 
@@ -122,9 +125,9 @@ A shaded, always-on-top strip is the app's "glanceable" form, so it must work we
 
 ### 2.9 Token Flow window (275x232 default, resizable in 25x29 px steps) - the visualiser module (amendment A3)
 
-A fourth window, **open by default** and toggled from the clutterbar **V** button (which lights
-while it is open) or Windows > Token Flow. It opens beside the stack rather than extending it, so
-the default layout is no taller than it was: a window nobody knows about is a window nobody opens.
+A fourth window, **open by default** - the third in the stack, under Sessions - and toggled from
+the clutterbar **V** button (which lights while it is open) or Windows > Token Flow. A window nobody
+knows about is a window nobody opens.
 Its frame comes from the `gen` sheet (§3.3) and its interior is one **phosphor field** (§3.3) drawn
 in skin pixels through the skin's own `viscolor.txt`.
 
@@ -190,9 +193,11 @@ edge comes within 8 skin-px·scale of another Tokenamp window's edge or of the s
 Windows that are docked to the main window (edge-adjacent, transitively) move with it when the main
 window is dragged. **Only the main window carries its group**: a sub-window that dragged its
 neighbours along could never be pulled out of a stack, because everything it touched would move with
-it and it would never appear to move at all. Default placement: EQ directly under main, playlist
-under EQ, Token Flow hung off the main window's right-hand edge and top-aligned with it. A window
-with no stored origin is placed at its default every launch, not only on a first run.
+it and it would never appear to move at all. Default placement: the main window at the top,
+**Sessions** under it and **Token Flow** under that, flush. The **Usage Equalizer** takes the foot
+of the column but starts closed (§2.3), so the app opens with three windows, not four. A window with
+no stored origin is placed at the foot of whatever is on screen when it is opened, rather than
+landing on top of another window.
 
 ### 2.8 Scale (amendment A2)
 

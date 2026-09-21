@@ -14,7 +14,7 @@ public final class Preferences {
         // NOTE: `scale` is deliberately NOT registered. SPEC 2.8 picks the first-run scale from the
         // screen, and a registered default would make `object(forKey:)` claim one was stored.
         defaults.register(defaults: [
-            K.eqOpen: true,
+            K.eqOpen: false,
             K.plOpen: true,
             K.alwaysOnTop: false,
             K.shuffle: false,
@@ -104,6 +104,8 @@ public final class Preferences {
     /// False on a first run, when the scale is chosen from the screen instead.
     public var hasStoredScale: Bool { defaults.object(forKey: K.scale) != nil }
 
+    /// The Usage Equalizer starts closed: its sliders are read-only gauges, so it is the one
+    /// window that has to be asked for (SPEC 2.6).
     public var eqOpen: Bool {
         get { defaults.bool(forKey: K.eqOpen) }
         set { defaults.set(newValue, forKey: K.eqOpen) }

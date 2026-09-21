@@ -91,16 +91,20 @@ public enum Docking {
 
     /// Default stacked layout: main at `mainOrigin` (top-left in screen coords), EQ directly
     /// under it, playlist under the EQ (SPEC 2.7). Returns bottom-left origins for AppKit.
-    public static func defaultStack(mainOrigin topLeft: CGPoint, scale: Double,
-                                    mainHeight: Int, eqHeight: Int, playlistHeight: Int) -> (main: CGPoint, eq: CGPoint, playlist: CGPoint) {
-        // The *exact* scaled height, not the window's ceil()ed one, so the stack stays flush.
+    /// Stack windows into a flush column from a top-left corner, given their skin-pixel heights
+    /// in top-to-bottom order. Returns one origin per height.
+    ///
+    /// Heights are scaled *exactly*, not through the window's ceil()ed size, so the column stays
+    /// flush at a fractional scale (SPEC 2.8).
+    public static func defaultColumn(topLeft: CGPoint, scale: Double, heights: [Int]) -> [CGPoint] {
         let s = CGFloat(max(ScaleModel.minPoints, scale))
-        let mh = CGFloat(mainHeight) * s
-        let eh = CGFloat(eqHeight) * s
-        let ph = CGFloat(playlistHeight) * s
-        let main = CGPoint(x: topLeft.x, y: topLeft.y - mh)
-        let eq = CGPoint(x: topLeft.x, y: main.y - eh)
-        let playlist = CGPoint(x: topLeft.x, y: eq.y - ph)
-        return (main, eq, playlist)
+        var out: [CGPoint] = []
+        var top = topLeft.y
+        for h in heights {
+            let scaled = CGFloat(h) * s
+            out.append(CGPoint(x: topLeft.x, y: top - scaled))
+            top -= scaled
+        }
+        return out
     }
 }

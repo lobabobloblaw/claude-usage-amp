@@ -71,33 +71,41 @@ public final class DockingManager {
         window.setFrameOrigin(snapped)
     }
 
-    /// Default placement: main at the top, EQ under it, playlist under the EQ, and Token Flow
-    /// alongside the stack (SPEC 2.7).
+    /// Default placement (SPEC 2.7): the main window at the top, Sessions under it, Token Flow
+    /// under that. The Usage Equalizer is placed at the foot of the column but starts closed - its
+    /// sliders are read-only gauges, so it is the one window that does not earn a place on screen
+    /// until it is asked for.
     public func applyDefaultLayout() {
         guard let main else { return }
         let screen = screenFrame(for: main) ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
         let topLeft = CGPoint(x: screen.minX + 40, y: screen.maxY - 40)
-        let stack = Docking.defaultStack(mainOrigin: topLeft, scale: scale,
-                                         mainHeight: Layout.Main.size.h,
-                                         eqHeight: Layout.EQ.size.h,
-                                         playlistHeight: playlistSkinHeight())
-        main.setFrameOrigin(stack.main)
-        equalizer?.setFrameOrigin(stack.eq)
-        playlist?.setFrameOrigin(stack.playlist)
-        placeFieldBesideMain()
+        let column = Docking.defaultColumn(topLeft: topLeft, scale: scale,
+                                           heights: [Layout.Main.size.h,
+                                                     playlistSkinHeight(),
+                                                     fieldSkinHeight(),
+                                                     Layout.EQ.size.h])
+        main.setFrameOrigin(column[0])
+        playlist?.setFrameOrigin(column[1])
+        field?.setFrameOrigin(column[2])
+        equalizer?.setFrameOrigin(column[3])
     }
 
-    /// Token Flow's default home: hung off the main window's right-hand edge, top-aligned, where
-    /// there is room for a second display without making the stack any taller.
-    public func placeFieldBesideMain() {
-        guard let main, let field else { return }
-        let width = CGFloat(Layout.Main.size.w) * CGFloat(max(ScaleModel.minPoints, scale))
-        field.setTopLeft(CGPoint(x: main.frame.minX + width, y: main.frame.maxY))
+    /// Where a window with no stored origin goes when it is opened: at the foot of whatever of the
+    /// column is on screen, so it never lands on top of another window.
+    public func placeBelowColumn(_ window: SkinWindow) {
+        let others = allWindows.filter { $0 !== window }
+        guard let lowest = others.min(by: { $0.frame.minY < $1.frame.minY }) else { return }
+        window.setTopLeft(CGPoint(x: lowest.frame.minX, y: lowest.frame.minY))
     }
 
     private func playlistSkinHeight() -> Int {
         guard let playlist else { return Layout.Playlist.defaultSize.h }
         return max(1, Int((playlist.frame.height / CGFloat(max(ScaleModel.minPoints, scale))).rounded()))
+    }
+
+    private func fieldSkinHeight() -> Int {
+        guard let field else { return Layout.Field.defaultSize.h }
+        return max(1, Int((field.frame.height / CGFloat(max(ScaleModel.minPoints, scale))).rounded()))
     }
 
     // MARK: - Keeping a docked group together across a size or scale change

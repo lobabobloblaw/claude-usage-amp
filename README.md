@@ -19,12 +19,12 @@ It loads **real classic `.wsz` skins**. The five skins in this repo were painted
 pixel by pixel in Python and drop straight into Winamp; skins from 1999 drop
 straight into Tokenamp.
 
-![Tokenamp's three windows in the Bulkhead skin](docs/images/hero.png)
+![Tokenamp's default layout in the Bulkhead skin: the player, Sessions and Token Flow](docs/images/hero.png)
 
 ## Token Flow
 
-A fourth window, open by default and toggled from the **V** button on the
-clutterbar. It is a vector
+The third window in the stack, open by default and toggled from the **V** button
+on the clutterbar. It is a vector
 phosphor display — a beam that accumulates into a buffer and decays, so it is
 bright where it lingers and faint where it flies — drawn in skin pixels and
 coloured entirely from the skin's own `viscolor.txt`. It has five

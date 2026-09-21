@@ -406,11 +406,14 @@ public enum SelfTest {
         let detached = Docking.dockedGroup(anchor: main, frames: [CGRect(x: 600, y: 0, width: 275, height: 116)])
         c.check("a detached window does not travel", detached.isEmpty)
 
-        let stack = Docking.defaultStack(mainOrigin: CGPoint(x: 10, y: 900), scale: 2,
-                                         mainHeight: 116, eqHeight: 116, playlistHeight: 232)
-        c.equal("default stack: main", stack.main, CGPoint(x: 10, y: 900 - 232))
-        c.equal("default stack: eq under main", stack.eq, CGPoint(x: 10, y: 900 - 232 - 232))
-        c.equal("default stack: playlist under eq", stack.playlist, CGPoint(x: 10, y: 900 - 232 - 232 - 464))
+        // The default column: main, then Sessions, then Token Flow (SPEC 2.7).
+        let column = Docking.defaultColumn(topLeft: CGPoint(x: 10, y: 900), scale: 2,
+                                           heights: [116, 232, 232])
+        c.equal("column: main at the top", column[0], CGPoint(x: 10, y: 900 - 232))
+        c.equal("column: sessions under main", column[1], CGPoint(x: 10, y: 900 - 232 - 464))
+        c.equal("column: token flow under sessions", column[2], CGPoint(x: 10, y: 900 - 232 - 464 - 464))
+        c.check("an empty column is empty",
+                Docking.defaultColumn(topLeft: .zero, scale: 2, heights: []).isEmpty)
     }
 
     // MARK: - Playlist geometry
@@ -458,10 +461,12 @@ public enum SelfTest {
                 ScaleModel.exactSize(skin: Layout.Main.size, points: 1.5).width, 412.5)
 
         // Docking maths must stay flush at a fractional scale.
-        let stack = Docking.defaultStack(mainOrigin: CGPoint(x: 100, y: 1000), scale: 1.5,
-                                         mainHeight: Layout.Main.size.h, eqHeight: Layout.EQ.size.h,
-                                         playlistHeight: Layout.Playlist.defaultSize.h)
-        c.close("EQ sits exactly under main at 1.5x", stack.eq.y, 1000 - 1.5 * 232, 1e-9)
+        let column = Docking.defaultColumn(topLeft: CGPoint(x: 100, y: 1000), scale: 1.5,
+                                           heights: [Layout.Main.size.h,
+                                                     Layout.Playlist.defaultSize.h])
+        c.close("sessions sit exactly under main at 1.5x", column[1].y,
+                1000 - 1.5 * Double(Layout.Main.size.h) - 1.5 * Double(Layout.Playlist.defaultSize.h),
+                1e-9)
         c.close("snap threshold scales", Double(Docking.threshold(scale: 1.5)), 12, 1e-9)
 
         // Device alignment of window origins.
