@@ -23,9 +23,10 @@ let package = Package(
         .target(name: "UsageCore", dependencies: ["UsageModel"], path: "Sources/UsageCore"),
         .executableTarget(name: "usage-dump", dependencies: ["UsageCore", "UsageModel"], path: "Sources/usage-dump"),
         .target(name: "TokenampKit", dependencies: ["UsageModel"], path: "Sources/TokenampKit"),
-        // INTEGRATION: "UsageCore" is added to this list (and Sources/Tokenamp/ProviderFactory.swift switched to
-        // LiveUsageProvider) only once both halves are finished, so a half-written data layer can never break UI builds.
-        .executableTarget(name: "Tokenamp", dependencies: ["TokenampKit", "UsageModel"], path: "Sources/Tokenamp"),
+        // INTEGRATION (done): both halves are finished, so the executable now links UsageCore and
+        // Sources/Tokenamp/ProviderFactory.swift hands the UI a LiveUsageProvider for a non-demo run.
+        // This is still the ONLY target that depends on both UsageCore and TokenampKit.
+        .executableTarget(name: "Tokenamp", dependencies: ["TokenampKit", "UsageModel", "UsageCore"], path: "Sources/Tokenamp"),
     ],
     swiftLanguageVersions: [.v5]
 )
