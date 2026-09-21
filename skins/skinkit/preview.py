@@ -57,7 +57,7 @@ __all__ = ["render_previews", "main", "PREVIEW_NAMES", "SCALE"]
 
 SCALE = 4  # nearest-neighbour factor for the ``*_4x.png`` files
 
-PREVIEW_NAMES = ("main", "shade", "eq", "playlist", "all")
+PREVIEW_NAMES = ("main", "shade", "eq", "playlist", "field", "all")
 
 #: anything the compositor could not find is left this colour, so a hole in a
 #: sheet screams instead of blending into the art.
@@ -857,6 +857,69 @@ class _Compositor:
         return c
 
     # -- playlist -------------------------------------------------------
+    def render_field(self) -> np.ndarray:
+        """The Token Flow window (SPEC 2.9): the `gen` frame around a mocked field."""
+        w, h = spec.window_size("field")
+        c = _new(w, h)
+        L = "field"
+        gen = self.sheet("gen")
+
+        top_h = int(spec.lval(L, "titleHeight"))
+        bot_h = int(spec.lval(L, "bottomHeight"))
+        left_w = int(spec.lval(L, "leftWidth"))
+        right_w = int(spec.lval(L, "rightWidth"))
+
+        tl = spec.sprite("gen", "GEN_TOP_LEFT")
+        tile = spec.sprite("gen", "GEN_TOP_TILE")
+        title = spec.sprite("gen", "GEN_TITLE_PLATE")
+        tr = spec.sprite("gen", "GEN_TOP_RIGHT")
+        lt = spec.sprite("gen", "GEN_LEFT_TILE")
+        rt = spec.sprite("gen", "GEN_RIGHT_TILE")
+        bl = spec.sprite("gen", "GEN_BOTTOM_LEFT")
+        bt = spec.sprite("gen", "GEN_BOTTOM_TILE")
+        br = spec.sprite("gen", "GEN_BOTTOM_RIGHT")
+
+        right_edge = w - tr.w
+        x = tl.w
+        while x < right_edge:
+            _blit(c, x, 0, gen, Rect(tile.x, tile.y, min(tile.w, right_edge - x), tile.h))
+            x += tile.w
+        _blit(c, 0, 0, gen, tl)
+        _blit(c, (w - title.w) // 2, 0, gen, title)
+        _blit(c, right_edge, 0, gen, tr)
+
+        body_top, body_bot = top_h, h - bot_h
+        y = body_top
+        while y < body_bot:
+            hh = min(lt.h, body_bot - y)
+            _blit(c, 0, y, gen, Rect(lt.x, lt.y, lt.w, hh))
+            _blit(c, w - right_w, y, gen, Rect(rt.x, rt.y, rt.w, hh))
+            y += lt.h
+
+        x = bl.w
+        while x < w - br.w:
+            _blit(c, x, body_bot, gen, Rect(bt.x, bt.y, min(bt.w, w - br.w - x), bt.h))
+            x += bt.w
+        _blit(c, 0, body_bot, gen, bl)
+        _blit(c, w - br.w, body_bot, gen, br)
+
+        cx, cy, cw, ch = spec.lval(L, "closeButtonFromTopRight")
+        self.spr(c, "gen", "GEN_CLOSE", w + int(cx), int(cy))
+        lx, ly, lw, lh = spec.lval(L, "lampFromTopRight")
+        self.spr(c, "gen", "GEN_LAMP_ON", w + int(lx), int(ly))
+
+        _field_trace(self, c, left_w, body_top, w - left_w - right_w, body_bot - body_top)
+
+        # the app draws these three in the skin's own 5x6 face (SPEC 2.9)
+        title_text = "TOKEN FLOW - AUTO"
+        self.bitmap_text(c, (w - len(title_text) * 5) // 2, int(spec.lval(L, "titleTextY")), title_text)
+        rx, ry = spec.lval(L, "readoutFromBottomLeft")
+        self.bitmap_text(c, int(rx), h + int(ry), "SCOPE")
+        vx, vy = spec.lval(L, "valueFromBottomRight")
+        value = "19.8K/MIN  78%"
+        self.bitmap_text(c, w + int(vx) - len(value) * 5, h + int(vy), value)
+        return c
+
     def render_playlist(self) -> np.ndarray:
         w, h = spec.window_size("playlist")
         c = _new(w, h)
@@ -1078,12 +1141,37 @@ def _catmull_rom(vals: Sequence[float], t: float) -> float:
 # public entry point
 # ---------------------------------------------------------------------------
 
+def _field_trace(comp, c, x0: int, y0: int, w: int, h: int) -> None:
+    """A stand-in for the phosphor field (SPEC 3.3).
+
+    The real display is drawn by the app, not by the toolkit, so this is only
+    enough of a trace -- in the skin's own visualiser colours -- to show the
+    artist how their frame sits around a live well.
+    """
+    import math
+
+    bg, dot = comp.vis[0], comp.vis[1]
+    _fill(c, x0, y0, w, h, bg)
+    for yy in range(2, h, 4):
+        for xx in range(2, w, 4):
+            _px(c, x0 + xx, y0 + yy, dot)
+    cy = y0 + h // 2
+    for i in range(w):
+        env = 0.25 + 0.75 * abs(math.sin(i * 0.035))
+        amp = env * (h / 2 - 8) * (0.45 + 0.55 * abs(math.sin(i * 0.78)))
+        top, bottom = int(cy - amp), int(cy + amp)
+        for yy in range(top, bottom + 1):
+            d = abs(yy - cy) / max(1.0, amp)
+            # the real field runs hot only at its core, so keep the mock off the top of the ramp
+            _px(c, x0 + i, yy, comp.vis[_clamp(int(5 + d * 12), 2, 17)])
+
+
 def render_previews(built_dir, out_dir) -> dict[str, Path]:
     """Composite mocked window previews from a built skin.
 
     :param built_dir: a directory of loose skin files, or a ``.wsz``/``.zip``.
     :param out_dir: created if needed; receives ``main.png``, ``shade.png``,
-        ``eq.png``, ``playlist.png``, ``all.png``, their ``*_4x.png``
+        ``eq.png``, ``playlist.png``, ``field.png``, ``all.png``, their ``*_4x.png``
         nearest-neighbour blow-ups, and ``sheets.png``.
     :returns: ``{"main": Path(...), "main_4x": Path(...), ..., "sheets": Path(...)}``
     """
@@ -1098,6 +1186,7 @@ def render_previews(built_dir, out_dir) -> dict[str, Path]:
             "shade": comp.render_shade(),
             "eq": comp.render_eq(),
             "playlist": comp.render_playlist(),
+            "field": comp.render_field(),
         }
 
         # docked stack: main / eq / playlist, no gaps (SPEC 2.7, 3.1)

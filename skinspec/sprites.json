@@ -196,6 +196,25 @@
         "PLAYLIST_COLLAPSE_SELECTED": [62, 42, 9, 9]
       },
       "notes": "Close button hit zone in the top-right corner piece: window (W-11, 3, 9, 9); its normal state is baked into PLAYLIST_TOP_RIGHT_CORNER. If pledit.bmp is missing fall back to the built-in base skin's sheet."
+    },
+    "gen": {
+      "file": "gen.bmp", "width": 152, "height": 50, "required": false,
+      "sprites": {
+        "GEN_TOP_LEFT": [0, 0, 12, 20],
+        "GEN_TOP_TILE": [13, 0, 25, 20],
+        "GEN_TOP_RIGHT": [39, 0, 12, 20],
+        "GEN_TITLE_PLATE": [52, 0, 100, 20],
+        "GEN_LEFT_TILE": [0, 21, 12, 29],
+        "GEN_RIGHT_TILE": [13, 21, 12, 29],
+        "GEN_BOTTOM_LEFT": [26, 21, 12, 14],
+        "GEN_BOTTOM_TILE": [39, 21, 25, 14],
+        "GEN_BOTTOM_RIGHT": [65, 21, 12, 14],
+        "GEN_CLOSE": [78, 21, 9, 9],
+        "GEN_CLOSE_PRESSED": [88, 21, 9, 9],
+        "GEN_LAMP_ON": [98, 21, 9, 9],
+        "GEN_LAMP_OFF": [108, 21, 9, 9]
+      },
+      "notes": "Tokenamp extension (SPEC 3.3), NOT the classic Winamp gen.bmp: the generic frame for the Token Flow window. A skin whose gen sheet is not exactly 152x50 is ignored in favour of the Base skin's, so a real Winamp gen.bmp is never sliced at these coordinates. The title text is drawn by the app in the skin's text.bmp font; nothing is baked into GEN_TITLE_PLATE. Tiles must be invariant along the axis they repeat on: the top/bottom tiles are 25 px (the width resize step) and the side tiles 29 px (the height step)."
     }
   },
   "textFiles": {
@@ -286,6 +305,16 @@
       "scrollHandleFromRight": -15,
       "runningInfoFromBottomRight": [-143, -28],
       "miniTimeFromBottomRight": [-87, -15]
+    },
+    "field": {
+      "minSize": [225, 145], "defaultSize": [275, 232], "resizeStep": [25, 29],
+      "titleHeight": 20, "bottomHeight": 14, "leftWidth": 12, "rightWidth": 12,
+      "closeButtonFromTopRight": [-11, 3, 9, 9],
+      "lampFromTopRight": [-23, 6, 9, 9],
+      "titleTextY": 7,
+      "readoutFromBottomLeft": [6, -10],
+      "valueFromBottomRight": [-6, -10],
+      "resizeGripFromBottomRight": [-20, -20, 20, 20]
     }
   }
 }

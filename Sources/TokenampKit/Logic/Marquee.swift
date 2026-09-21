@@ -142,6 +142,19 @@ public enum Marquee {
 
     public static func visualizerReading() -> String { "TOKEN FLOW - LAST 6 MIN" }
 
+    /// Hovering the Token Flow field: which configuration is up, and what it is reading (SPEC 2.9).
+    public static func fieldReading(_ mode: FieldMode, auto: Bool, snapshot: UsageSnapshot) -> String {
+        let what: String
+        switch mode {
+        case .scope: what = "TOKEN FLOW - LAST 6 MIN"
+        case .strata: what = "FRESH TOKENS BY BUCKET"
+        case .web: what = "\(snapshot.sessionsToday.count) SESSIONS - \(snapshot.activeSessionCount) LIVE"
+        case .orbit: what = "SESSION WINDOW - " + NumberFormatting.percent(snapshot.limit(.session)?.percent ?? 0)
+        case .phase: what = "FLOW VS ITSELF 15S AGO"
+        }
+        return BitmapFont.sanitize("\(mode.label)\(auto ? " (AUTO)" : ""): \(what)")
+    }
+
     /// `T-3H: 1.24M TOK  $4.10` (SPEC 2.3).
     public static func eqBandReading(label: String, tokens: Double, cost: Double) -> String {
         BitmapFont.sanitize("\(label): \(NumberFormatting.abbreviated(tokens)) TOK  "

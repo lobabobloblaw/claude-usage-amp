@@ -72,3 +72,9 @@ list of traps that cost a pixel each.
   must stay complete and legible at 1x.
 - The Sessions list is drawn with each skin's own bitmap typeface (`plfont`,
   SPEC 3.2), never a system font.
+- `gen.bmp` is the Token Flow window's frame (SPEC 3.3) and is a **Tokenamp
+  extension**, not the classic Winamp sheet of that name: it must be exactly
+  152x50 or the app ignores it and uses `Base`'s. Nothing may be baked into
+  `GEN_TITLE_PLATE` — the app draws the window title over it in the skin's own
+  `text.bmp` face. Its top and bottom tiles repeat horizontally (x-invariant,
+  25 px) and its side tiles repeat vertically (y-invariant, 29 px).

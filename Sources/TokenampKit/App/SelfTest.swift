@@ -70,6 +70,7 @@ public enum SelfTest {
         docking(c)
         scaleModel(c)
         playlistGeometry(c)
+        tokenFlow(c)
         fontMap(c)
         playlistFont(c, tmp: tmp)
         textFileParsers(c)
@@ -999,7 +1000,188 @@ public enum SelfTest {
         }
     }
 
+    // MARK: - Token Flow (SPEC 2.9)
+
+    private static func tokenFlow(_ c: Checker) {
+        c.section("token flow")
+        let now = DemoUsageProvider.referenceDate
+        let snap = DemoUsageProvider(frozenAt: now).snapshot
+        let skin = Skin.base
+
+        // Geometry of the window itself.
+        let well = FieldRenderer.canvasRect(width: Layout.Field.defaultSize.w,
+                                            height: Layout.Field.defaultSize.h)
+        c.equal("well width = window minus both rails",
+                well.w, Layout.Field.defaultSize.w - Layout.Field.leftWidth - Layout.Field.rightWidth)
+        c.equal("well height = window minus title and readout",
+                well.h, Layout.Field.defaultSize.h - Layout.Field.titleHeight - Layout.Field.bottomHeight)
+        c.equal("resize snaps to the width step",
+                FieldRenderer.snapWidth(Layout.Field.minSize.w + 13),
+                Layout.Field.minSize.w + Layout.Field.resizeStep.w)
+        c.equal("resize never goes below the minimum",
+                FieldRenderer.snapHeight(10), Layout.Field.minSize.h)
+        c.check("every control has a region",
+                Set(FieldRenderer.regions(width: 275, height: 232).map { $0.id })
+                    .isSuperset(of: [.fieldClose, .fieldLamp, .fieldCanvas, .fieldResize, .fieldTitleBar]))
+
+        // Modulators are pure functions of the snapshot.
+        let mods = FieldModulators(snapshot: snap, now: now)
+        c.check("pressure in range", mods.pressure >= 0 && mods.pressure <= 1)
+        c.check("energy in range", mods.energy > 0 && mods.energy <= 1)
+        c.check("persistence is a sane time constant", mods.persistence >= 0.35 && mods.persistence <= 2.3)
+        c.check("phase in range", mods.phase >= 0 && mods.phase <= 1)
+        c.check("at least one beam", mods.beams >= 1)
+        c.equal("modulators are deterministic", mods, FieldModulators(snapshot: snap, now: now))
+
+        let idle = UsageSnapshot(generatedAt: now, lastEventAt: now.addingTimeInterval(-3_600))
+        c.check("an idle account dims the field",
+                FieldModulators(snapshot: idle, now: now).energy < mods.energy)
+
+        // The director holds a choice for its dwell time, but a critical limit cuts in at once.
+        var director = FieldDirector(start: .scope, now: now)
+        let busy = UsageSnapshot(generatedAt: now, limits: [], activeSessionCount: 3, lastEventAt: now)
+        let busyMods = FieldModulators(snapshot: busy, now: now)
+        c.equal("two live sessions ask for the connectome",
+                FieldDirector.preferred(busy, mods: busyMods, now: now), FieldMode.web)
+        c.equal("but not the moment it is asked for",
+                director.resolve(busy, mods: busyMods, now: now.addingTimeInterval(5)), FieldMode.scope)
+        c.equal("and only once it has kept asking for a whole dwell",
+                director.resolve(busy, mods: busyMods,
+                                 now: now.addingTimeInterval(5 + FieldDirector.dwell + 1)), FieldMode.web)
+
+        // A momentary blip must not flip a steady display: the debounce restarts when the answer
+        // goes back to what is already on screen.
+        var steady = FieldDirector(start: .scope, now: now)
+        let calm = UsageSnapshot(generatedAt: now, activeSessionCount: 1, lastEventAt: now)
+        let calmMods = FieldModulators(snapshot: calm, now: now)
+        _ = steady.resolve(calm, mods: calmMods, now: now.addingTimeInterval(600))
+        _ = steady.resolve(busy, mods: busyMods, now: now.addingTimeInterval(601))
+        _ = steady.resolve(calm, mods: calmMods, now: now.addingTimeInterval(602))
+        c.equal("one blip after a quiet hour does not switch anything",
+                steady.resolve(busy, mods: busyMods, now: now.addingTimeInterval(603)), FieldMode.scope)
+
+        // Idleness has two readings: nothing to look at, or a day's history worth reading.
+        let quiet = UsageSnapshot(generatedAt: now, lastEventAt: now.addingTimeInterval(-1_800))
+        c.equal("an idle account with no history shows the ring",
+                FieldDirector.preferred(quiet, mods: FieldModulators(snapshot: quiet, now: now), now: now),
+                FieldMode.orbit)
+        var withHistory = quiet
+        withHistory.sessionsToday = snap.sessionsToday
+        c.equal("an idle account with a day behind it shows the ledger",
+                FieldDirector.preferred(withHistory,
+                                        mods: FieldModulators(snapshot: withHistory, now: now), now: now),
+                FieldMode.strata)
+
+        let nearReset = UsageSnapshot(
+            generatedAt: now,
+            limits: [LimitGauge(id: "session", kind: .session, title: "SESSION (5H)", percent: 40,
+                                resetsAt: now.addingTimeInterval(300), windowSeconds: 18_000,
+                                severity: "normal", isActive: true)],
+            activeSessionCount: 3, lastEventAt: now)
+        c.equal("a reset minutes away shows the ring, whatever else is happening",
+                FieldDirector.preferred(nearReset,
+                                        mods: FieldModulators(snapshot: nearReset, now: now), now: now),
+                FieldMode.orbit)
+
+        let critical = UsageSnapshot(
+            generatedAt: now,
+            limits: [LimitGauge(id: "session", kind: .session, title: "SESSION (5H)", percent: 97,
+                                resetsAt: now.addingTimeInterval(1_200), windowSeconds: 18_000,
+                                severity: "critical", isActive: true)],
+            activeSessionCount: 3, lastEventAt: now)
+        var hot = FieldDirector(start: .web, now: now)
+        c.equal("a critical limit overrides the dwell",
+                hot.resolve(critical, mods: FieldModulators(snapshot: critical, now: now),
+                            now: now.addingTimeInterval(1)), FieldMode.orbit)
+
+        // Every configuration renders, at every size, without trapping - including on no data.
+        let empty = UsageSnapshot.empty(at: now)
+        for mode in FieldMode.allCases {
+            for (w, h) in [(Layout.Field.minSize.w, Layout.Field.minSize.h),
+                           (Layout.Field.defaultSize.w, Layout.Field.defaultSize.h)] {
+                let settled = FieldRenderer.settled(snapshot: snap, skin: skin, mode: mode,
+                                                    span: .minutes, width: w, height: h, now: now)
+                guard let image = settled.image else {
+                    c.check("\(mode.rawValue) \(w)x\(h): image", false)
+                    continue
+                }
+                let wellRect = FieldRenderer.canvasRect(width: w, height: h)
+                c.equal("\(mode.rawValue) \(w)x\(h): fills the well",
+                        SkinPair(image.width, image.height), SkinPair(wellRect.w, wellRect.h))
+                c.check("\(mode.rawValue) \(w)x\(h): draws something", !isUniform(image))
+            }
+            c.check("\(mode.rawValue): empty snapshot renders",
+                    FieldRenderer.settled(snapshot: empty, skin: skin, mode: mode, span: .minutes,
+                                          width: 275, height: 232, now: now).image != nil)
+        }
+
+        // The settled field is what --snapshot writes, so it has to be reproducible.
+        let a = FieldRenderer.settled(snapshot: snap, skin: skin, mode: .scope, span: .minutes,
+                                      width: 275, height: 232, now: now)
+        let b = FieldRenderer.settled(snapshot: snap, skin: skin, mode: .scope, span: .minutes,
+                                      width: 275, height: 232, now: now)
+        c.check("settled fields are identical", samePixels(a.image, b.image))
+
+        // The live path steps the same buffer the settled render does, so stepping it by hand
+        // has to stay bounded and land in the same place. (The window itself needs AppKit, but
+        // this is the part that could drift or blow up.)
+        let live = PhosphorField(width: well.w, height: well.h)
+        for i in 0..<120 {
+            live.decay(dt: 1.0 / 30, persistence: mods.persistence)
+            _ = FieldGeometry.draw(.scope, into: live, snapshot: snap, mods: mods, span: .minutes,
+                                   flows: [:], t: Double(i) / 30, now: now)
+        }
+        c.check("the live field stays finite", live.beam.allSatisfy { $0.isFinite && $0 >= 0 })
+        c.check("the live field stays bounded", live.beam.allSatisfy { $0 < 50 })
+        c.check("the live field draws something", live.beam.contains { $0 > 0.02 })
+        live.decay(dt: 30, persistence: 0.4)
+        c.check("a long gap fades it to nothing", live.beam.allSatisfy { $0 < 0.001 })
+
+        // The whole window, chrome and all.
+        var state = SnapshotRunner.makeState(snapshot: snap, scale: 1, now: now)
+        state.fieldMode = .web
+        let webField = FieldRenderer.settled(snapshot: snap, skin: skin, mode: .web, span: .minutes,
+                                             width: state.fieldWidth, height: state.fieldHeight, now: now)
+        c.check("the connectome labels its nodes", !webField.labels.isEmpty)
+        c.check("labels stay in the classic charset",
+                webField.labels.allSatisfy { $0.text.allSatisfy { BitmapFont.charset.contains($0) } })
+        if let canvas = SkinCanvas.offscreen(width: state.fieldWidth, height: state.fieldHeight, scale: 1) {
+            FieldRenderer.draw(canvas, skin: skin, snapshot: snap, state: state,
+                               field: webField.image, labels: webField.labels)
+            guard let image = canvas.makeImage() else {
+                c.check("window renders", false)
+                return
+            }
+            c.equal("window pixel size", SkinPair(image.width, image.height),
+                    SkinPair(state.fieldWidth, state.fieldHeight))
+            c.check("window is not blank", !isUniform(image))
+        } else {
+            c.check("window canvas", false)
+        }
+
+        // Per-session flow comes from diffing snapshots, because UsageModel has no time series.
+        let tracker = SessionFlowTracker()
+        guard let row = snap.sessionsToday.first else {
+            c.check("demo data has a session to track", false)
+            return
+        }
+        tracker.ingest(snap, now: now)
+        c.equal("a first sighting is not flow", tracker.flow(row.id, now: now), 0)
+        var moved = snap
+        moved.sessionsToday[0].tokens.output += 300_000
+        tracker.ingest(moved, now: now.addingTimeInterval(5))
+        c.check("tokens arriving read as flow", tracker.flow(row.id, now: now.addingTimeInterval(5)) > 0)
+        c.equal("and it fades out", tracker.flow(row.id, now: now.addingTimeInterval(600)), 0)
+    }
+
     // MARK: - Small helpers
+
+    private static func samePixels(_ a: CGImage?, _ b: CGImage?) -> Bool {
+        guard let a, let b, a.width == b.width, a.height == b.height,
+              let da = a.dataProvider?.data as Data?, let db = b.dataProvider?.data as Data? else { return false }
+        return da == db
+    }
+
 
     private static func isUniform(_ image: CGImage) -> Bool {
         guard let data = image.dataProvider?.data as Data? , data.count > 16 else { return true }

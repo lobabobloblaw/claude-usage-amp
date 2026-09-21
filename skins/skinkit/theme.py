@@ -1079,6 +1079,98 @@ class Theme:
         self.paint_title_button(c, "shade", pressed)
 
     # ==================================================================
+    # gen -- the Token Flow window frame (SPEC 3.3)
+    # ==================================================================
+    # A plain generic frame, because the window's own art is the phosphor
+    # field inside it.  There is only one title-bar state (no selected /
+    # unselected pair) and no text is baked into the title plate: the app
+    # sets the title in the skin's own text.bmp face, so a skin never has to
+    # be repainted when a configuration is added.
+
+    def paint_gen_top_left(self, c: Canvas) -> None:
+        """12x20 -- top-left corner of the Token Flow frame."""
+        self._pl_title_strip(c, True)
+        c.vline(0, 0, c.h - 1, self.edge_black)
+        c.vline(1, 2, c.h - 1, self.edge_light)
+
+    def paint_gen_top_tile(self, c: Canvas) -> None:
+        """25x20 -- repeated along the top edge.  Must be x-invariant."""
+        self._pl_title_strip(c, True)
+        pitch = 5 if c.w % 5 == 0 else 4
+        for gx in range(0, c.w, pitch):
+            c.vline(gx, 5, 13, self.title_grip_lo)
+            c.vline(gx + 1, 5, 13, self.title_grip_hi)
+
+    def paint_gen_top_right(self, c: Canvas) -> None:
+        """12x20 -- top-right corner; the close button and lamp sit over it."""
+        self._pl_title_strip(c, True)
+        c.vline(c.w - 1, 0, c.h - 1, self.edge_black)
+        c.vline(c.w - 2, 2, c.h - 1, self.edge_mid)
+
+    def paint_gen_title_plate(self, c: Canvas) -> None:
+        """100x20 -- the centred title plate.  Deliberately blank: the window
+        title is drawn over it at run time in the skin's bitmap font."""
+        self._pl_title_strip(c, True)
+        inset = 6
+        c.box(inset, 4, c.w - 2 * inset, 11,
+              mix(self.title_active_lo, self.edge_black, 0.35))
+        fx.bevel_sunken(c, (inset, 4, c.w - 2 * inset, 11), light=self.edge_mid,
+                        shadow=self.edge_black)
+
+    def paint_gen_left_tile(self, c: Canvas) -> None:
+        """12x29 -- repeated down the left edge.  Must be y-invariant."""
+        self._pl_plate(c, repeat="v")
+        c.vline(0, 0, c.h - 1, self.edge_black)
+        c.vline(1, 0, c.h - 1, self.edge_light)
+        c.vline(c.w - 1, 0, c.h - 1, self.edge_black)
+        c.vline(c.w - 2, 0, c.h - 1, darken(self.pl_face, 0.35))
+
+    def paint_gen_right_tile(self, c: Canvas) -> None:
+        """12x29 -- repeated down the right edge.  Must be y-invariant."""
+        self._pl_plate(c, repeat="v")
+        c.vline(0, 0, c.h - 1, self.edge_black)
+        c.vline(1, 0, c.h - 1, darken(self.pl_face, 0.35))
+        c.vline(c.w - 1, 0, c.h - 1, self.edge_black)
+        c.vline(c.w - 2, 0, c.h - 1, self.edge_light)
+
+    def paint_gen_bottom_tile(self, c: Canvas) -> None:
+        """25x14 -- repeated along the bottom edge.  Must be x-invariant."""
+        self._pl_plate(c, repeat="h")
+        c.hline(0, c.w - 1, 0, self.edge_black)
+        c.hline(0, c.w - 1, 1, lighten(self.pl_face, 0.18))
+        c.hline(0, c.w - 1, c.h - 1, self.edge_black)
+        c.hline(0, c.w - 1, c.h - 2, self.edge_mid)
+
+    def paint_gen_bottom_left(self, c: Canvas) -> None:
+        """12x14 -- bottom-left corner."""
+        self.paint_gen_bottom_tile(c)
+        c.vline(0, 0, c.h - 1, self.edge_black)
+        c.vline(1, 0, c.h - 2, self.edge_light)
+
+    def paint_gen_bottom_right(self, c: Canvas) -> None:
+        """12x14 -- bottom-right corner; carries the resize grip."""
+        self.paint_gen_bottom_tile(c)
+        c.vline(c.w - 1, 0, c.h - 1, self.edge_black)
+        c.vline(c.w - 2, 0, c.h - 2, self.edge_mid)
+        # three diagonal notches: the grip the window is resized by
+        for k in range(3):
+            x = c.w - 3 - k * 3
+            y = c.h - 3
+            c.hline(x - 2, x, y, self.edge_black)
+            c.hline(x - 2, x, y - 1, lighten(self.pl_face, 0.3))
+
+    def paint_gen_close(self, c: Canvas, pressed: bool) -> None:
+        """9x9 -- Token Flow close button."""
+        self.paint_title_button(c, "close", pressed)
+
+    def paint_gen_lamp(self, c: Canvas, lit: bool) -> None:
+        """9x9 -- the AUTO lamp: lit while the field picks its own configuration."""
+        c.fill(self.btn_face)
+        self.button_face(c, False, double=False)
+        self.lamp(c, 2, 2, 5, 5, lit)
+        c.a[:, :, 3] = 255
+
+    # ==================================================================
     # plfont -- the Sessions-list typeface (SPEC 3.2)
     # ==================================================================
     # The playlist rows are drawn with the skin's own bitmap face, never a

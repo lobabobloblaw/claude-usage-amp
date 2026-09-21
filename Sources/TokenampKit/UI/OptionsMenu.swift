@@ -59,6 +59,8 @@ public enum OptionsMenu {
                                     on: app.equalizer?.window.isVisible ?? false))
         windows.addItem(target.item("Playlist", #selector(MenuTarget.togglePlaylist),
                                     on: app.playlist?.window.isVisible ?? false))
+        windows.addItem(target.item("Token Flow", #selector(MenuTarget.toggleField),
+                                    on: app.field?.isVisible ?? false))
         windows.addItem(target.item("Window Shade", #selector(MenuTarget.toggleShade),
                                     on: app.mainWindow?.isShade ?? false))
         menu.addItem(submenu("Windows", windows))
@@ -141,6 +143,7 @@ final class MenuTarget: NSObject {
     @objc func toggleEqualizer() { app?.toggleEqualizer() }
     @objc func togglePlaylist() { app?.togglePlaylist() }
     @objc func toggleShade() { app?.toggleShade() }
+    @objc func toggleField() { app?.toggleField() }
 
     @objc func pickVisualizer(_ sender: NSMenuItem) {
         guard let raw = sender.representedObject as? String, let m = VisualizerMode(rawValue: raw) else { return }

@@ -49,6 +49,7 @@ public enum SheetID: String, CaseIterable, Sendable {
     case text = "text"
     case eqmain = "eqmain"
     case pledit = "pledit"
+    case gen = "gen"
 }
 
 /// Evenly spaced background frames inside a sheet (volume/balance heat ramp, EQ slider wells).
@@ -91,7 +92,7 @@ public struct SpriteRef: Equatable, Hashable, Sendable {
 }
 
 public enum SkinSpec {
-    public static let sheetOrder: [SheetID] = [.main, .titlebar, .cbuttons, .shufrep, .posbar, .volume, .balance, .monoster, .playpaus, .numbers, .numsEx, .text, .eqmain, .pledit]
+    public static let sheetOrder: [SheetID] = [.main, .titlebar, .cbuttons, .shufrep, .posbar, .volume, .balance, .monoster, .playpaus, .numbers, .numsEx, .text, .eqmain, .pledit, .gen]
 
     public static let sheets: [SheetID: SheetSpec] = [
         .main: SheetSpec(id: .main, file: "main.bmp", width: 275, height: 116, required: true, frames: nil),
@@ -108,6 +109,7 @@ public enum SkinSpec {
         .text: SheetSpec(id: .text, file: "text.bmp", width: 155, height: 74, required: true, frames: nil),
         .eqmain: SheetSpec(id: .eqmain, file: "eqmain.bmp", width: 275, height: 315, required: false, frames: FrameSpec(count: 28, x0: 13, y0: 164, strideX: 15, strideY: 65, perRow: 14, w: 14, h: 63)),
         .pledit: SheetSpec(id: .pledit, file: "pledit.bmp", width: 280, height: 186, required: false, frames: nil),
+        .gen: SheetSpec(id: .gen, file: "gen.bmp", width: 152, height: 50, required: false, frames: nil),
     ]
 
     /// Every sprite rectangle, keyed by sheet then by sprite name.
@@ -273,6 +275,21 @@ public enum SkinSpec {
             "PLAYLIST_CLOSE_SELECTED": SpriteRect(52, 42, 9, 9),
             "PLAYLIST_COLLAPSE_SELECTED": SpriteRect(62, 42, 9, 9),
         ],
+        .gen: [
+            "GEN_TOP_LEFT": SpriteRect(0, 0, 12, 20),
+            "GEN_TOP_TILE": SpriteRect(13, 0, 25, 20),
+            "GEN_TOP_RIGHT": SpriteRect(39, 0, 12, 20),
+            "GEN_TITLE_PLATE": SpriteRect(52, 0, 100, 20),
+            "GEN_LEFT_TILE": SpriteRect(0, 21, 12, 29),
+            "GEN_RIGHT_TILE": SpriteRect(13, 21, 12, 29),
+            "GEN_BOTTOM_LEFT": SpriteRect(26, 21, 12, 14),
+            "GEN_BOTTOM_TILE": SpriteRect(39, 21, 25, 14),
+            "GEN_BOTTOM_RIGHT": SpriteRect(65, 21, 12, 14),
+            "GEN_CLOSE": SpriteRect(78, 21, 9, 9),
+            "GEN_CLOSE_PRESSED": SpriteRect(88, 21, 9, 9),
+            "GEN_LAMP_ON": SpriteRect(98, 21, 9, 9),
+            "GEN_LAMP_OFF": SpriteRect(108, 21, 9, 9),
+        ],
     ]
 
     public static func rect(_ sheet: SheetID, _ name: String) -> SpriteRect? {
@@ -436,6 +453,20 @@ public enum Spr {
     public static let PLAYLIST_SCROLL_HANDLE_SELECTED = SpriteRef(.pledit, "PLAYLIST_SCROLL_HANDLE_SELECTED", SpriteRect(61, 53, 8, 18))
     public static let PLAYLIST_CLOSE_SELECTED = SpriteRef(.pledit, "PLAYLIST_CLOSE_SELECTED", SpriteRect(52, 42, 9, 9))
     public static let PLAYLIST_COLLAPSE_SELECTED = SpriteRef(.pledit, "PLAYLIST_COLLAPSE_SELECTED", SpriteRect(62, 42, 9, 9))
+    // gen.bmp
+    public static let GEN_TOP_LEFT = SpriteRef(.gen, "GEN_TOP_LEFT", SpriteRect(0, 0, 12, 20))
+    public static let GEN_TOP_TILE = SpriteRef(.gen, "GEN_TOP_TILE", SpriteRect(13, 0, 25, 20))
+    public static let GEN_TOP_RIGHT = SpriteRef(.gen, "GEN_TOP_RIGHT", SpriteRect(39, 0, 12, 20))
+    public static let GEN_TITLE_PLATE = SpriteRef(.gen, "GEN_TITLE_PLATE", SpriteRect(52, 0, 100, 20))
+    public static let GEN_LEFT_TILE = SpriteRef(.gen, "GEN_LEFT_TILE", SpriteRect(0, 21, 12, 29))
+    public static let GEN_RIGHT_TILE = SpriteRef(.gen, "GEN_RIGHT_TILE", SpriteRect(13, 21, 12, 29))
+    public static let GEN_BOTTOM_LEFT = SpriteRef(.gen, "GEN_BOTTOM_LEFT", SpriteRect(26, 21, 12, 14))
+    public static let GEN_BOTTOM_TILE = SpriteRef(.gen, "GEN_BOTTOM_TILE", SpriteRect(39, 21, 25, 14))
+    public static let GEN_BOTTOM_RIGHT = SpriteRef(.gen, "GEN_BOTTOM_RIGHT", SpriteRect(65, 21, 12, 14))
+    public static let GEN_CLOSE = SpriteRef(.gen, "GEN_CLOSE", SpriteRect(78, 21, 9, 9))
+    public static let GEN_CLOSE_PRESSED = SpriteRef(.gen, "GEN_CLOSE_PRESSED", SpriteRect(88, 21, 9, 9))
+    public static let GEN_LAMP_ON = SpriteRef(.gen, "GEN_LAMP_ON", SpriteRect(98, 21, 9, 9))
+    public static let GEN_LAMP_OFF = SpriteRef(.gen, "GEN_LAMP_OFF", SpriteRect(108, 21, 9, 9))
 }
 
 /// Window layouts: where each sprite is placed inside its window, in skin pixels.
@@ -534,6 +565,22 @@ public enum Layout {
         public static let scrollHandleFromRight = -15
         public static let runningInfoFromBottomRight = SkinPair(-143, -28)
         public static let miniTimeFromBottomRight = SkinPair(-87, -15)
+    }
+
+    public enum Field {
+        public static let minSize = SkinPair(225, 145)
+        public static let defaultSize = SkinPair(275, 232)
+        public static let resizeStep = SkinPair(25, 29)
+        public static let titleHeight = 20
+        public static let bottomHeight = 14
+        public static let leftWidth = 12
+        public static let rightWidth = 12
+        public static let closeButtonFromTopRight = SpriteRect(-11, 3, 9, 9)
+        public static let lampFromTopRight = SpriteRect(-23, 6, 9, 9)
+        public static let titleTextY = 7
+        public static let readoutFromBottomLeft = SkinPair(6, -10)
+        public static let valueFromBottomRight = SkinPair(-6, -10)
+        public static let resizeGripFromBottomRight = SpriteRect(-20, -20, 20, 20)
     }
 }
 

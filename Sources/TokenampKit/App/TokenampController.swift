@@ -18,6 +18,7 @@ public final class TokenampController: NSObject {
     public private(set) var mainWindow: MainWindowController!
     public private(set) var equalizer: EqualizerWindowController!
     public private(set) var playlist: PlaylistWindowController!
+    public private(set) var field: FieldWindowController!
     private var statusItem: StatusItemController?
     private let notifier = ThresholdNotifier()
 
@@ -42,6 +43,8 @@ public final class TokenampController: NSObject {
     public private(set) var playState: PlayState = .playing
     public private(set) var visualizerMode: VisualizerMode
     private let visualizer = VisualizerModel()
+    /// Per-session flow for the connectome, recovered by diffing snapshots (SPEC 2.9).
+    private let sessionFlow = SessionFlowTracker()
 
     private var marqueeText = ""
     private var marqueeOffset = 0.0
@@ -107,10 +110,12 @@ public final class TokenampController: NSObject {
         mainWindow = MainWindowController(app: self)
         equalizer = EqualizerWindowController(app: self)
         playlist = PlaylistWindowController(app: self)
+        field = FieldWindowController(app: self)
 
         docking.main = mainWindow.window
         docking.equalizer = equalizer.window
         docking.playlist = playlist.window
+        docking.field = field.window
         docking.scale = scale
 
         restoreWindowPositions()
@@ -123,6 +128,7 @@ public final class TokenampController: NSObject {
         if prefs.shadeMode { mainWindow.setShade(true, persist: false) }
         if prefs.eqOpen { equalizer.show() }
         if prefs.playlistOpen { playlist.show() }
+        if prefs.fieldOpen { field.show() }
         if prefs.menuBarReadout { setMenuBarReadout(true) }
 
         provider.onChange = { [weak self] snap in self?.ingest(snap) }
@@ -131,6 +137,7 @@ public final class TokenampController: NSObject {
         provider.start()
         ingest(provider.snapshot)
         visualizer.settle(snapshot: snapshot)
+        field.settle()
 
         // Persist the layout we ended up with, so it survives even an abrupt exit.
         saveWindowPositions()
@@ -155,6 +162,7 @@ public final class TokenampController: NSObject {
             lastDataAt = Date()
         }
         snapshot = snap
+        sessionFlow.ingest(snap, now: Date())
         heroIndex = HeroTrack.resolveIndex(heroIndex, count: max(1, snap.limits.count))
         rebuildMarquee()
         if prefs.repeatAlerts { notifier.check(snapshot: snap) }
@@ -167,6 +175,7 @@ public final class TokenampController: NSObject {
             lastEQSignature = eqSig
             equalizer.view.needsDisplay = true
         }
+        field?.refreshReadout()
         let plSig = "\(snap.sessionsToday.count)|\(snap.sessionsToday.map { $0.costUSD })|\(snap.today.costUSD)"
         if plSig != lastPlaylistSignature {
             lastPlaylistSignature = plSig
@@ -257,8 +266,11 @@ public final class TokenampController: NSObject {
         mainWindow.animate(visualizerMoved: visMoved, marqueeMoved: marqueeMoved,
                            digitsChanged: digitsChanged, workLED: workLEDIsOn(now))
 
+        let fieldAnimating = (field?.isVisible ?? false) && playState != .stopped
+        if fieldAnimating { field.animate(dt: dt) }
+
         // Idle down when nothing is moving, so a parked app costs ~nothing.
-        let busy = visMoved || marqueeMoved || playState == .playing
+        let busy = visMoved || marqueeMoved || playState == .playing || fieldAnimating
         setAnimating(busy)
     }
 
@@ -300,7 +312,15 @@ public final class TokenampController: NSObject {
         s.mainIsKey = mainWindow?.window.isKeyWindow ?? false
         s.eqIsKey = equalizer?.window.isKeyWindow ?? false
         s.playlistIsKey = playlist?.window.isKeyWindow ?? false
-        s.latchedClutter = prefs.alwaysOnTop ? ["A"] : []
+        s.fieldIsKey = field?.window.isKeyWindow ?? false
+        s.fieldMode = field?.mode ?? prefs.fieldMode
+        s.fieldAuto = prefs.fieldAuto
+        s.fieldSpan = prefs.fieldSpan
+        s.fieldWidth = prefs.fieldWidth
+        s.fieldHeight = prefs.fieldHeight
+        var latched: Set<String> = prefs.alwaysOnTop ? ["A"] : []
+        if field?.isVisible == true { latched.insert("V") }
+        s.latchedClutter = latched
         s.eqRange = prefs.eqRange
         s.eqMeasure = prefs.eqMeasure
         s.eqRelative = prefs.eqRelative
@@ -327,7 +347,12 @@ public final class TokenampController: NSObject {
     public func setPlayState(_ s: PlayState) {
         playState = s
         provider.isPaused = (s != .playing)
-        if s == .stopped { visualizer.silence() }
+        if s == .stopped {
+            visualizer.silence()
+            field?.silence()
+        } else {
+            field?.settle()
+        }
         rebuildMarquee()
         mainWindow.view.needsDisplay = true
         setAnimating(true)
@@ -381,6 +406,40 @@ public final class TokenampController: NSObject {
         mainWindow.view.needsDisplay = true
     }
 
+    /// Clutterbar **V** and Windows > Token Flow.
+    public func toggleField() {
+        if field.isVisible {
+            field.hide()
+        } else {
+            // Place it before it is shown, or a first open flashes at the origin and then jumps.
+            placeFieldIfUnplaced()
+            field.settle()
+            field.show()
+        }
+        prefs.fieldOpen = field.isVisible
+        saveWindowPositions()
+        mainWindow.view.needsDisplay = true
+        setAnimating(true)
+    }
+
+    /// The first time the window is opened it has no stored origin: hang it off the right-hand
+    /// edge of the main window, where there is room for a second display.
+    private func placeFieldIfUnplaced() {
+        guard prefs.origin(.field) == nil, let main = mainWindow?.window else { return }
+        field.window.setTopLeft(CGPoint(x: main.frame.maxX, y: main.frame.maxY))
+        docking.settle(field.window)
+    }
+
+    /// Flow per session id for the connectome, 0...1.
+    func sessionFlows(now: Date) -> [String: Double] {
+        var out: [String: Double] = [:]
+        for row in snapshot.sessionsToday {
+            let f = sessionFlow.flow(row.id, now: now)
+            if f > 0 { out[row.id] = f }
+        }
+        return out
+    }
+
     public func togglePlaylist() {
         if playlist.window.isVisible { playlist.hide() } else { playlist.show() }
         prefs.playlistOpen = playlist.window.isVisible
@@ -398,6 +457,7 @@ public final class TokenampController: NSObject {
         mainWindow?.window.level = level
         equalizer?.window.level = level
         playlist?.window.level = level
+        field?.window.level = level
     }
 
     /// The screen the main window will land on before it exists: the one holding the stored
@@ -452,6 +512,7 @@ public final class TokenampController: NSObject {
         mainWindow.applyScale(points)
         equalizer.applyScale(points)
         playlist.applyScale(points)
+        field.applyScale(points)
         docking.relayoutDocked(from: before)
         clampOnScreen()
         saveWindowPositions()
@@ -531,6 +592,9 @@ public final class TokenampController: NSObject {
         case .khz: return Marquee.activeSessionsReading(snapshot)
         case .monoster: return Marquee.sourcesReading(snapshot)
         case .visualizer: return Marquee.visualizerReading()
+        case .fieldCanvas:
+            return Marquee.fieldReading(field?.mode ?? prefs.fieldMode, auto: prefs.fieldAuto,
+                                        snapshot: snapshot)
         case .eqPreamp: return Marquee.eqPreampReading(snapshot)
         default:
             if let i = id.eqBandIndex {
@@ -582,6 +646,8 @@ public final class TokenampController: NSObject {
         mainWindow?.skinChanged()
         equalizer?.skinChanged()
         playlist?.skinChanged()
+        field?.skinChanged()
+        field?.settle()
     }
 
     public func presentLoadSkinPanel() {
@@ -630,6 +696,8 @@ public final class TokenampController: NSObject {
         } else {
             docking.applyDefaultLayout()
         }
+        // The Token Flow window is not part of the default stack, so it restores on its own.
+        if let f = prefs.origin(.field) { field.window.setFrameOrigin(f) }
         clampOnScreen()
     }
 
@@ -638,6 +706,7 @@ public final class TokenampController: NSObject {
         prefs.setOrigin(mainWindow.window.frame.origin, for: .main)
         if let eq = equalizer { prefs.setOrigin(eq.window.frame.origin, for: .equalizer) }
         if let pl = playlist { prefs.setOrigin(pl.window.frame.origin, for: .playlist) }
+        if let f = field, f.isVisible { prefs.setOrigin(f.window.frame.origin, for: .field) }
     }
 
     /// Put the group back on a screen if a display was unplugged or rearranged since the positions
@@ -648,7 +717,10 @@ public final class TokenampController: NSObject {
     /// across the moment the primary display changes. And the whole group is moved by one shared
     /// delta, so a rescue never scatters windows that were docked together.
     private func clampOnScreen() {
-        let windows = [mainWindow?.window, equalizer?.window, playlist?.window].compactMap { $0 }
+        // Only windows that are actually on screen count: a Token Flow window that has never
+        // been opened is still sitting at its birth origin and would make the group look rescued.
+        let windows = [mainWindow?.window, equalizer?.window, playlist?.window,
+                       field?.isVisible == true ? field?.window : nil].compactMap { $0 }
         guard !windows.isEmpty else { return }
         let screens = NSScreen.screens.map { $0.visibleFrame }
         guard let home = (NSScreen.main ?? NSScreen.screens.first)?.visibleFrame else { return }

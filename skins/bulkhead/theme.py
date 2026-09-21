@@ -14,6 +14,7 @@ Module map (all inside this folder):
     bh_digits     amber CRT time numerals
     bh_parts      frames, CRT glass, rail, keycaps, toggles, ladders, knobs ...
     bh_main / bh_eq / bh_playlist   the three windows
+    bh_field      the Token Flow frame (gen.bmp)
 """
 
 from __future__ import annotations
@@ -28,12 +29,14 @@ sys.path.insert(0, str(_HERE))
 from skinkit.theme import Theme  # noqa: E402
 
 import bh_eq  # noqa: E402
+import bh_field  # noqa: E402
 import bh_main  # noqa: E402
 import bh_palette as P  # noqa: E402
 import bh_playlist  # noqa: E402
 
 
-class Bulkhead(bh_main.MainMixin, bh_eq.EqMixin, bh_playlist.PlaylistMixin, Theme):
+class Bulkhead(bh_main.MainMixin, bh_eq.EqMixin, bh_playlist.PlaylistMixin,
+               bh_field.FieldMixin, Theme):
     name = "Bulkhead"
     author = "Tokenamp"
     description = ("Engineering-deck control module: worn gunmetal plate, chipped safety "

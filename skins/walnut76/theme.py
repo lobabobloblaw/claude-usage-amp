@@ -20,6 +20,7 @@ Module map (all inside this folder):
     w76_plfont_data the Sessions-list humanist dial face
     w76_widgets     piano keys, switches, tuning dial, slide pots, beacons
     w76_main / w76_eq / w76_playlist   the three windows
+    w76_field       the Token Flow hood (the gen sheet)
 """
 
 from __future__ import annotations
@@ -34,6 +35,7 @@ sys.path.insert(0, str(_HERE))
 from skinkit.theme import Theme  # noqa: E402
 
 import w76_eq  # noqa: E402
+import w76_field  # noqa: E402
 import w76_main  # noqa: E402
 import w76_palette as P  # noqa: E402
 import w76_playlist  # noqa: E402
@@ -41,7 +43,7 @@ import w76_widgets  # noqa: E402
 
 
 class Walnut76(w76_main.MainWindow, w76_eq.EqWindow, w76_playlist.PlaylistWindow,
-               w76_widgets.Widgets, Theme):
+               w76_field.FieldWindow, w76_widgets.Widgets, Theme):
     name = "Walnut 76"
     dist_name = "Walnut76"
     author = "Tokenamp"

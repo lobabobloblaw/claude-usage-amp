@@ -179,7 +179,8 @@ public final class MainWindowController: NSObject, SkinViewDelegate, NSWindowDel
         case ControlID.clutter("D"):
             app.cycleScale()
         case ControlID.clutter("V"):
-            app.cycleVisualizer()
+            // Winamp's V is the visualisation button; here it opens the visualiser's own window.
+            app.toggleField()
         default:
             break
         }

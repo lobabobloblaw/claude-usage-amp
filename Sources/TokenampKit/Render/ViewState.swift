@@ -53,6 +53,13 @@ public struct ControlID: Hashable, CustomStringConvertible {
         return Int(raw.dropFirst("eqBand:".count))
     }
 
+    // Token Flow
+    public static let fieldTitleBar = ControlID("fieldTitleBar")
+    public static let fieldClose = ControlID("fieldClose")
+    public static let fieldLamp = ControlID("fieldLamp")
+    public static let fieldCanvas = ControlID("fieldCanvas")
+    public static let fieldResize = ControlID("fieldResize")
+
     // Playlist
     public static let plTitleBar = ControlID("plTitleBar")
     public static let plClose = ControlID("plClose")
@@ -127,6 +134,7 @@ public struct ViewState {
     public var mainIsKey: Bool = true
     public var eqIsKey: Bool = false
     public var playlistIsKey: Bool = false
+    public var fieldIsKey: Bool = false
     /// Clutter letters that are latched on (A = always on top, V while the menu is open...).
     public var latchedClutter: Set<String> = []
 
@@ -135,6 +143,14 @@ public struct ViewState {
     public var eqMeasure: EQMeasure = .cost
     public var eqRelative: Bool = true
     public var eqAuto: Bool = false
+
+    // token flow
+    /// The configuration actually on screen: what AUTO resolved to, or what the user picked.
+    public var fieldMode: FieldMode = .scope
+    public var fieldAuto: Bool = false
+    public var fieldSpan: FieldSpan = .minutes
+    public var fieldWidth: Int = Layout.Field.defaultSize.w
+    public var fieldHeight: Int = Layout.Field.defaultSize.h
 
     // playlist
     public var playlistWidth: Int = Layout.Playlist.defaultSize.w

@@ -12,6 +12,10 @@ It really whips the llama's tokens.
 > **A1 (2026-09-20, user feedback):** the Sessions/playlist rows must not use a generic system font.
 > They are drawn with a per-skin bitmap typeface, `plfont` — see §2.4 and §3.2. This supersedes every
 > earlier mention of "vector text" for playlist rows.
+> **A3 (2026-09-20, user request):** the visualiser is no longer only a strip in the faceplate.
+> It also has a window of its own, **Token Flow** - a vector phosphor field with five configurations
+> that the state of the account modulates and can switch between on its own. See §2.9 and §3.3. The
+> faceplate well in §2.1 is unchanged; the new window is an addition, off by default.
 > **A2 (2026-09-20, user feedback):** a fixed 2× default is far too large on a 1920×1200-point HiDPI
 > screen (the docked stack was 550×928 pt). Scale is now expressed in **device pixels per skin pixel**
 > so half steps are available on Retina, and the default is chosen from the screen — see §2.8. This
@@ -116,11 +120,49 @@ A shaded, always-on-top strip is the app's "glanceable" form, so it must work we
 - Frame assembled from the pledit.bmp pieces: tile the top/bottom/side tiles, centre the 100 px
   title piece, then corners. Close button hit-zone in the top-right corner hides the window.
 
+### 2.9 Token Flow window (275x232 default, resizable in 25x29 px steps) - the visualiser module (amendment A3)
+
+A fourth window, off by default, opened from the clutterbar **V** button or Windows > Token Flow.
+Its frame comes from the `gen` sheet (§3.3) and its interior is one **phosphor field** (§3.3) drawn
+in skin pixels through the skin's own `viscolor.txt`.
+
+**The five configurations.** Each is a different geometry for the same field, not a different chart:
+
+| | Draws | Reads |
+|---|---|---|
+| **SCOPE** | Bipolar trace over the last 6 min 20 s: output above the axis, input + cache writes below, cache reads as a mirrored echo behind both. One trace per active session, so parallel work interferes on one axis. Messages punch through as blips; a comet marks `now`. | `fine` |
+| **STRATA** | The ledger: one riser per bucket with a tick where each fresh class ends, an outline over the total, cache reads as a ghost behind, and the **pace line** - the rate that lands exactly on the reset without hitting the wall. Span from the context menu or the wheel: last hour / last day / last 10 days. | `minutes`, `hours`, `days` |
+| **WEB** | The connectome: a hub, one node per model in play, one per session today. Node radius by tokens, brightness by recency, a pulse ring while live, edge energy by flow. Active sessions are held near the hub, idle ones drift to the rim. Names are set in the skin's `text.bmp` font. | `sessionsToday` + snapshot diffs |
+| **ORBIT** | The polar wall: angle is position in the limit window, radius is how hard the work was, and the rings *are* the limits - session inside, weekly outside - with the consumed arc filling each. Past 85 % the ring sheds sparks where the arc presses on it. | `limits`, `hours`, `minutes` |
+| **PHASE** | The return map: the flow now against the flow 15 s earlier, trailed. Steady work sits on the diagonal and every burst-and-recover cycle throws a loop off it, so the figure is the *rhythm* of the work. Plotting one token class against another was tried first and collapses onto a line whenever the mix is steady. | `fine` |
+
+**The modulators** ride on whichever configuration is up, and are pure functions of the snapshot:
+**pressure** (tightest limit - biases the palette hot and closes a visible wall in past 55 %),
+**energy** (burn rate, faded down by idleness), **persistence** (the phosphor time constant: bursty
+work keeps a long tail, steady work a short one), **echo** (the cache-read layer), **phase**
+(where you are between resets), **beams** (one per active session).
+
+**AUTO** (the title-bar lamp, or the context menu) lets the field choose: idle -> ORBIT, or STRATA
+when there is history to read; one steady session -> SCOPE; two or more live -> WEB; a critical
+limit or a reset within 10 minutes -> ORBIT, overriding. A choice holds for 24 s before another can
+take over - a debounce, not a rate limit, so one poll that momentarily sees a second session
+cannot flip a steady display. A critical limit still cuts in at once.
+
+**Interaction.** Click the field to step to the next configuration (this also leaves AUTO); the
+lamp toggles AUTO; the wheel changes the STRATA span; right-click picks a configuration or span
+directly; drag the title bar to move, the bottom-right grip to resize; the close button hides it.
+The bottom bar reads `<CONFIGURATION> [SPAN]` on the left and `<BURN>/MIN  <WORST LIMIT>%` on the
+right, in the classic 5x6 font. Hovering the field writes its reading into the main marquee (§2.5).
+
+`UsageModel` is frozen and carries only per-session *totals*, so WEB's per-node flow is recovered by
+diffing successive snapshots in the controller (`SessionFlowTracker`) rather than by extending the
+model.
+
 ### 2.5 Hover readings (marquee override, 1.5 s linger)
 
 volume → `SESSION: 42% USED - RESETS IN 2H47M` · balance → `WEEK (ALL): 17% USED - RESETS MON 1PM` ·
 posbar → `<HERO>: 2H13M ELAPSED / 2H47M LEFT` · kbps → `BURN: 128K TOK/MIN  $38.20/HR` ·
-kHz → `2 ACTIVE SESSIONS` · mono/stereo → source status · visualizer → `TOKEN FLOW - LAST 6 MIN` ·
+kHz → `2 ACTIVE SESSIONS` · mono/stereo → source status · visualizer → `TOKEN FLOW - LAST 6 MIN` · Token Flow field → `<CONFIGURATION>: <what it reads>` ·
 EQ band / preamp → as in 2.3.
 
 ### 2.6 Menus and persistence
@@ -128,13 +170,14 @@ EQ band / preamp → as in 2.3.
 Right-click anywhere (and the options button, and clutterbar O) opens the options menu:
 Skins ▸ (bundled skins, user skins, separator, Load Skin…, Open Skins Folder, Reload Current) ·
 Scale ▸ 1× 2× 3× · Always on Top · Windows ▸ Equalizer / Playlist / Window Shade ·
-Visualizer ▸ Spectrum / Oscilloscope / Off · Data ▸ Live Plan Limits (toggle), Refresh Now,
+Windows ▸ Token Flow · Visualizer ▸ Spectrum / Oscilloscope / Off · Data ▸ Live Plan Limits (toggle), Refresh Now,
 Poll Every ▸ 30 s / 1 min / 2 min / 5 min, Playlist Shows ▸ Cost / Tokens, Demo Data (toggle) ·
 Menu Bar Readout (toggle; an `NSStatusItem` showing `42%·2h47m`) · About Tokenamp · Quit.
 
 The app is a regular Dock app with a minimal main menu (About, Quit ⌘Q, Window). Persist in
 `UserDefaults`: skin path, scale (default 2), window origins, which windows are open, shade state,
-always-on-top, toggles, visualizer mode, EQ range/measure, poll interval. Dropping a `.wsz`/`.zip`/folder
+always-on-top, toggles, visualizer mode, EQ range/measure, poll interval, and the Token Flow
+window's origin, size, open state, configuration, AUTO and span. Dropping a `.wsz`/`.zip`/folder
 onto any window loads it as the skin and copies it into the user skins folder
 `~/Library/Application Support/Tokenamp/Skins/`.
 
@@ -227,14 +270,46 @@ is ignored. Nothing in the app is drawn with a system font except the macOS menu
 - Toolkit: themes paint it through `pl_font_cell()`, `paint_pl_font_glyph(c, ch)` and
   `pl_font_metrics()`; the Python preview compositor renders rows with the identical algorithm.
 
+### 3.3 `gen` and the phosphor field - the Token Flow window (Tokenamp extension; amendment A3)
+
+**The sheet.** `gen.bmp`/`gen.png`, 152x50, optional, laid out in `skinspec/sprites.json`. It is
+*not* the classic Winamp `gen.bmp`: slicing a foreign one at these coordinates would produce
+garbage, so a `gen` sheet whose size is not exactly 152x50 is ignored with a warning and the Base
+skin's frame is used instead. Every skin therefore gets the window whether or not it ships the
+sheet. Pieces: three top pieces plus a 100 px title plate, two side tiles, three bottom pieces, the
+close button (normal + pressed) and the AUTO lamp (on + off). The top and bottom tiles repeat
+horizontally and must be x-invariant; the side tiles repeat vertically and must be y-invariant.
+**No text is baked into the title plate** - the app draws the window title over it in the skin's own
+`text.bmp` font, so adding a configuration never means repainting a skin.
+
+**The field.** One accumulation buffer per skin pixel of the well, plus an echo channel, both
+decayed every frame and composited through `viscolor.txt`: the bar ramp (2 hot ... 17 dim) for the
+beam, the scope ramp (18 ... 22) for the echo, colour 1 for the graticule, and for the saturated
+core whichever of colour 23 and colour 2 sits furthest from the background - on a light skin the
+core has to be the *darkest* ink, or the trace reads as vanishing into the paper.
+
+- Energy is deposited **per unit of beam path**, so a long sweep and a short one read the same per
+  pixel, and it is scaled by `1 - decay`, so persistence changes the length of the tail and not the
+  brightness of a settled field.
+- Curves are Catmull-Rom sampled at a fixed parametric rate and splatted bilinearly, so the beam is
+  bright where it lingers and faint where it flies - the dwell brightness of a real vector display,
+  and the reason an oscilloscope, a histogram and a connectome read as one instrument.
+- `FieldRenderer.settle` runs the accumulator to convergence over a fixed frame count, with the
+  step taken from the persistence (six time constants of the slower channel), so a long tail is as
+  bright as a short one and `--snapshot` output is reproducible - exactly as `VisualizerModel.settled`
+  is for the faceplate. The live window settles *its own* buffer, so a configuration change, a span
+  change or a resize does not show a settled picture that collapses on the next frame.
+- The window animates on the app's existing 30 fps clock and only while it is on screen.
+
 ### 3.1 Offscreen snapshot mode (required — this is how the work gets verified)
 
 ```
 Tokenamp --snapshot <outdir> [--skin <path>] [--scale N] [--demo] [--at <unix-seconds>] [--state <name>]
 ```
 Renders, without showing any window or needing Screen Recording permission, PNG files:
-`main.png`, `eq.png`, `playlist.png`, `shade.png`, plus `all.png` (the three windows docked
-vertically, main/eq/playlist, as they appear by default). `--demo` uses
+`main.png`, `eq.png`, `playlist.png`, `shade.png`, one `field-<configuration>.png` per Token Flow
+configuration (§2.9 - one golden cannot show a display whose geometry changes with the state), plus
+`all.png` (the three windows docked vertically, main/eq/playlist, as they appear by default). `--demo` uses
 `DemoUsageProvider(frozenAt:)` (default `--at` = `DemoUsageProvider.referenceDate`) so output is
 reproducible. `--state pressed` renders with play + EQ toggle + volume thumb in their pressed/selected
 variants (exercises the alternate sprites). Visualizer bars render at their settled target heights

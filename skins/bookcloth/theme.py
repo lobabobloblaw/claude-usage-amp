@@ -26,12 +26,13 @@ from skinkit.theme import Theme  # noqa: E402
 
 from bookcloth_art import palette as P  # noqa: E402
 from bookcloth_art.win_eq import EqMixin  # noqa: E402
+from bookcloth_art.win_field import FieldMixin  # noqa: E402
 from bookcloth_art.win_main import MainMixin  # noqa: E402
 from bookcloth_art.win_playlist import PlaylistMixin  # noqa: E402
 from bookcloth_art.win_widgets import WidgetMixin  # noqa: E402
 
 
-class Bookcloth(MainMixin, WidgetMixin, EqMixin, PlaylistMixin, Theme):
+class Bookcloth(MainMixin, WidgetMixin, EqMixin, PlaylistMixin, FieldMixin, Theme):
     name = "Bookcloth"
     author = "Tokenamp"
     description = ("Hand-bound in clay-orange book cloth and ivory laid paper, with "

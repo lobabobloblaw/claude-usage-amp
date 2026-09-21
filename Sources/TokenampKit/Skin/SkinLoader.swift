@@ -125,6 +125,15 @@ public enum SkinLoader {
                     warnings.append("\(spec.file) could not be decoded - using Base")
                     continue
                 }
+                // `gen` is a Tokenamp extension that happens to share a filename with a sheet
+                // from later classic Winamp versions (SPEC 3.3). Slicing a foreign gen.bmp at
+                // Tokenamp's coordinates would produce garbage, so only an exact match is taken
+                // and anything else quietly falls back to Base's frame.
+                if id == .gen, image.width != spec.width || image.height != spec.height {
+                    warnings.append("\(spec.file) is \(image.width)x\(image.height), not the "
+                                    + "\(spec.width)x\(spec.height) Tokenamp frame - using Base's")
+                    continue
+                }
                 if image.width < spec.width || image.height < spec.height {
                     warnings.append("\(spec.file) is \(image.width)x\(image.height), expected "
                                     + "\(spec.width)x\(spec.height) - sprites outside it are skipped")

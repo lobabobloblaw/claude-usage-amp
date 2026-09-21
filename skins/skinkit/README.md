@@ -201,6 +201,33 @@ Positions below assume the default 275×232 playlist size (`W=275`, `H=232`);
 | `paint_pl_collapse(self, c, pressed: bool)` | 9×9 | `(W-21, 3)` = (254,3) | Delegates to `paint_title_button(c, "shade", pressed)`. |
 | `paint_pl_font_glyph(self, c, ch: str)` | `pl_font_cell()` (Base default 8×10) | none — a free-floating grid cell, not window-anchored | One cell of the Sessions-list bitmap typeface `plfont.bmp` (SPEC §3.2, not a `sprites.json` sheet). The canvas is pre-filled black; paint **white for full ink, greys for partial coverage** — it's an ink-coverage mask, not colour, so a grey pixel reads as a soft phosphor halo once the app tints it. `ch` is the character, with the ellipsis cell passed as `"…"`. Full detail in §9. |
 
+### Token Flow window (`window="field"`, tiled) — the `gen` sheet, SPEC 3.3
+
+Positions assume the default 275×232 Token Flow size (`W=275`, `H=232`);
+`title_h=20`, `bottom_h=14`, `left_w=12`, `right_w=12`. The frame has a single
+title-bar state — there is no selected/unselected pair — and **no text may be
+baked into the title plate**: the app draws the window title over it at run time
+in the skin's own `text.bmp` face, centred, at y=7.
+
+| Method | Sprite size | Window position (default size) | Draws |
+|---|---|---|---|
+| `paint_gen_top_left(self, c)` | 12×20 | `(0,0)` | Top-left corner. |
+| `paint_gen_top_tile(self, c)` | 25×20 | `(0,0)`, repeated | Top edge; **must be x-invariant** (any internal pitch must divide 25). Painted at x=0 because the app lays the whole edge from x=0 and stamps the corners over it — that is the phase you are actually painting. |
+| `paint_gen_top_right(self, c)` | 12×20 | `(W-12,0)` = (263,0) | Top-right corner; the close button and the AUTO lamp are drawn over it. |
+| `paint_gen_title_plate(self, c)` | 100×20 | centred, `((W-100)//2, 0)` = (87,0) | The recess the window title is drawn into. Leave it legible and leave it empty. |
+| `paint_gen_left_tile(self, c)` | 12×29 | `(0, title_h)` = (0,20), repeated | Left rail; **must be y-invariant** (pitch must divide 29). |
+| `paint_gen_right_tile(self, c)` | 12×29 | `(W-12, title_h)` = (263,20), repeated | Right rail; **must be y-invariant**. |
+| `paint_gen_bottom_left(self, c)` | 12×14 | `(0, H-bottom_h)` = (0,218) | Bottom-left corner. |
+| `paint_gen_bottom_tile(self, c)` | 25×14 | `(0, H-bottom_h)` = (0,218), repeated | Bottom edge; **must be x-invariant**, same x=0 phase as the top tile. Carries two lines of 5×6 app-drawn text (bottom-left and bottom-right), so keep its middle band quiet. |
+| `paint_gen_bottom_right(self, c)` | 12×14 | `(W-12, H-bottom_h)` = (263,218) | Bottom-right corner; carries the resize grip. |
+| `paint_gen_close(self, c, pressed: bool)` | 9×9 | `(W-11, 3)` = (264,3) | Close button; the two states must differ. |
+| `paint_gen_lamp(self, c, lit: bool)` | 9×9 | `(W-23, 6)` = (252,6) | The AUTO lamp: lit while the field is choosing its own configuration. The two states must differ. |
+
+The window is resizable in 25×29 px steps, which is why the tile pitches are
+what they are. The interior is not skin art at all: it is the phosphor field the
+app draws from `viscolor.txt` (SPEC 3.3), so the palette hooks below decide what
+the display itself looks like.
+
 ### Data hooks
 
 | Method | Returns | Meaning |

@@ -13,11 +13,37 @@ readout counts down to your next reset, the marquee scrolls the headline
 numbers, the visualiser is your token flow, the sliders are your limits, and the
 playlist is your sessions.
 
+The visualiser also has a window of its own.
+
 It loads **real classic `.wsz` skins**. The five skins in this repo were painted
 pixel by pixel in Python and drop straight into Winamp; skins from 1999 drop
 straight into Tokenamp.
 
 ![Tokenamp's three windows in the Bulkhead skin](docs/images/hero.png)
+
+## Token Flow
+
+A fourth window, opened from the **V** button on the clutterbar. It is a vector
+phosphor display — a beam that accumulates into a buffer and decays, so it is
+bright where it lingers and faint where it flies — drawn in skin pixels and
+coloured entirely from the skin's own `viscolor.txt`. It has five
+configurations:
+
+| | |
+|---|---|
+| **Scope** | The last six minutes as a bipolar trace: what came out above the axis, what went in below, and the context that was re-read as an echo behind both. One trace per live session. |
+| **Strata** | The ledger — fresh tokens per bucket over the last hour, day or ten days, with a pace line at the rate that reaches your next reset without hitting the wall. |
+| **Web** | The connectome: your sessions and the models they are running on, pulsing as work arrives, live ones pulled in to the hub and idle ones drifting out. |
+| **Orbit** | The limit window as a ring, with the consumed arc filling it and your burn traced inside. Past 85% the ring starts to shed sparks. |
+| **Phase** | The flow plotted against itself fifteen seconds earlier. Steady work sits on the diagonal; every burst-and-recover cycle throws a loop off it, so the figure is the rhythm of the work. |
+
+Leave the lamp lit and it picks for itself: the connectome when several sessions
+are live, the scope when one is, the ring when you are close to a wall or a
+reset. What is on screen is modulated by the state underneath it — the palette
+runs hot as a limit fills, a wall closes in past halfway, bursty work leaves a
+longer phosphor tail than steady work, and each live session adds a beam.
+
+![The Token Flow window in five skins, one configuration each](docs/images/flow.png)
 
 ## The skins
 

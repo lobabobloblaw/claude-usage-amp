@@ -20,6 +20,7 @@ from skinkit.theme import Theme                                   # noqa: E402
 from amethyst_art import palette as P                             # noqa: E402
 from amethyst_art import displays, main_bg, main_widgets as MW    # noqa: E402
 from amethyst_art import eq_window as EQ, pl_window as PL         # noqa: E402
+from amethyst_art import field_window as FW                       # noqa: E402
 from amethyst_art.pen import Pen                                  # noqa: E402
 
 
@@ -122,6 +123,19 @@ class Amethyst(Theme):
     def paint_pl_scroll_handle(self, c, pressed): PL.scroll_handle(c, pressed)
     def paint_pl_close(self, c, pressed): MW.title_button(c, "close", pressed)
     def paint_pl_collapse(self, c, pressed): MW.title_button(c, "shade", pressed)
+
+    # ---- Token Flow (SPEC 3.3) ---------------------------------------------
+    def paint_gen_top_left(self, c): FW.top_left(c)
+    def paint_gen_top_tile(self, c): FW.top_tile(c)
+    def paint_gen_top_right(self, c): FW.top_right(c)
+    def paint_gen_title_plate(self, c): FW.title_plate(c)
+    def paint_gen_left_tile(self, c): FW.left_tile(c)
+    def paint_gen_right_tile(self, c): FW.right_tile(c)
+    def paint_gen_bottom_left(self, c): FW.bottom_left(c)
+    def paint_gen_bottom_tile(self, c): FW.bottom_tile(c)
+    def paint_gen_bottom_right(self, c): FW.bottom_right(c)
+    def paint_gen_close(self, c, pressed): FW.close(c, pressed)
+    def paint_gen_lamp(self, c, lit): FW.lamp(c, lit)
 
     # ---- plfont --------------------------------------------------------------
     def pl_font_cell(self): return displays.PL_CELL

@@ -39,9 +39,11 @@ SHEET_CASE = {
     "text": "text",
     "eqmain": "eqmain",
     "pledit": "pledit",
+    "gen": "gen",
 }
 
-WINDOW_ENUM = {"main": "Main", "shade": "Shade", "eq": "EQ", "playlist": "Playlist"}
+WINDOW_ENUM = {"main": "Main", "shade": "Shade", "eq": "EQ", "playlist": "Playlist",
+               "field": "Field"}
 
 # Swift keywords that can appear as a JSON layout key and must be back-ticked.
 SWIFT_KEYWORDS = {

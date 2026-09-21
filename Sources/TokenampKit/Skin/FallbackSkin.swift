@@ -53,6 +53,7 @@ enum FallbackSkin {
         case .text: paintFont(c)
         case .eqmain: paintEQ(c)
         case .pledit: paintPledit(c)
+        case .gen: paintGen(c)
         }
     }
 
@@ -324,6 +325,22 @@ enum FallbackSkin {
             if name.contains("COLLAPSE") { caption(c, "-", x: CGFloat(r.x) + 2, y: CGFloat(r.y) + 7, size: 7) }
             if name.contains("SCROLL_HANDLE") { c.fill(r.cg, selected ? ink : chassisLight) }
             if name.contains("VISUALIZER") { c.fill(r.cg, paper) }
+        }
+    }
+
+    /// The Token Flow frame (SPEC 3.3): plain bevelled chassis, because the window's own art is
+    /// the field inside it.
+    private static func paintGen(_ c: SkinCanvas) {
+        guard let rects = SkinSpec.spriteRects[.gen] else { return }
+        for (name, r) in rects {
+            let lit = name.contains("LAMP_ON")
+            c.fill(r.cg, name.contains("PRESSED") ? chassisDark : chassis)
+            bevel(c, r.cg, raised: !name.contains("PRESSED"))
+            if name.contains("CLOSE") { caption(c, "x", x: CGFloat(r.x) + 2, y: CGFloat(r.y) + 7, size: 7) }
+            if name.contains("LAMP") {
+                c.fill(CGRect(x: CGFloat(r.x) + 2, y: CGFloat(r.y) + 2, width: 5, height: 5),
+                       lit ? ink : chassisDark)
+            }
         }
     }
 

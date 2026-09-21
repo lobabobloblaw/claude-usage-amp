@@ -140,6 +140,8 @@ _DIFFER_PAIRS = [
      "playlist top-left active/inactive"),
     ("pledit", "PLAYLIST_TITLE_BAR_SELECTED", "PLAYLIST_TITLE_BAR",
      "playlist title active/inactive"),
+    ("gen", "GEN_CLOSE", "GEN_CLOSE_PRESSED", "Token Flow close button"),
+    ("gen", "GEN_LAMP_ON", "GEN_LAMP_OFF", "Token Flow AUTO lamp"),
 ]
 
 

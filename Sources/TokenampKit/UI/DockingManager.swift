@@ -8,6 +8,7 @@ public final class DockingManager {
     public weak var main: SkinWindow?
     public weak var equalizer: SkinWindow?
     public weak var playlist: SkinWindow?
+    public weak var field: SkinWindow?
     /// Points per skin pixel (SPEC 2.8).
     public var scale: Double = 2
 
@@ -17,7 +18,7 @@ public final class DockingManager {
     public init() {}
 
     private var allWindows: [SkinWindow] {
-        [main, equalizer, playlist].compactMap { $0 }.filter { $0.isVisible }
+        [main, equalizer, playlist, field].compactMap { $0 }.filter { $0.isVisible }
     }
 
     private func screenFrame(for window: SkinWindow) -> CGRect? {

@@ -7,7 +7,8 @@ app draws -- offscreen, so it needs no Screen Recording permission.
     python3 scripts/make_screenshots.py
 
 Writes ``docs/images/hero.png`` (one skin's full window stack),
-``docs/images/skins.png`` (every skin's main window, stacked) and
+``docs/images/skins.png`` (every skin's main window, stacked),
+``docs/images/flow.png`` (the Token Flow window, one configuration per skin) and
 ``docs/images/icon.png`` (the app icon, for the README's header).
 
 The demo clock defaults to ``DemoUsageProvider.referenceDate`` rather than to
@@ -31,6 +32,9 @@ APP = ROOT / "build" / "Tokenamp.app" / "Contents" / "MacOS" / "Tokenamp"
 #: order the skins appear in the gallery
 SKINS = ["Bulkhead", "Walnut76", "Amethyst", "Bookcloth", "Base"]
 HERO = "Bulkhead"
+#: one Token Flow configuration per skin for the gallery row -- five geometries, five palettes
+FLOW = [("Bulkhead", "scope"), ("Amethyst", "web"), ("Walnut76", "orbit"),
+        ("Bookcloth", "strata"), ("Base", "phase")]
 SCALE = 2
 PAD = 16
 BG = (22, 22, 24)
@@ -55,6 +59,22 @@ def stack(images: list[Image.Image], gap: int) -> Image.Image:
     for im in images:
         out.paste(im, ((w - im.width) // 2, y))
         y += im.height + gap
+    return out
+
+
+def grid(images: list[Image.Image], per_row: int, gap: int) -> Image.Image:
+    rows = [images[i:i + per_row] for i in range(0, len(images), per_row)]
+    row_w = [sum(im.width for im in r) + gap * (len(r) - 1) for r in rows]
+    w = max(row_w) + PAD * 2
+    h = sum(max(im.height for im in r) for r in rows) + gap * (len(rows) - 1) + PAD * 2
+    out = Image.new("RGB", (w, h), BG)
+    y = PAD
+    for r, width in zip(rows, row_w):
+        x = (w - width) // 2
+        for im in r:
+            out.paste(im, (x, y))
+            x += im.width + gap
+        y += max(im.height for im in r) + gap
     return out
 
 
@@ -87,6 +107,10 @@ def main() -> None:
 
         stack([shots[s]["main"] for s in SKINS], gap=PAD).save(OUT / "skins.png")
         print(f"wrote {OUT / 'skins.png'}")
+
+        grid([shots[skin][f"field-{mode}"] for skin, mode in FLOW],
+             per_row=3, gap=PAD).save(OUT / "flow.png")
+        print(f"wrote {OUT / 'flow.png'}")
 
 
 if __name__ == "__main__":

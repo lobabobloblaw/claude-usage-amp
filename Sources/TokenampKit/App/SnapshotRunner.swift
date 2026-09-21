@@ -14,7 +14,8 @@ public enum SnapshotRunner {
         public var skinName: String
     }
 
-    /// Render `main.png`, `eq.png`, `playlist.png`, `shade.png` and `all.png` into `directory`.
+    /// Render `main.png`, `eq.png`, `playlist.png`, `shade.png`, one `field-<mode>.png` per
+    /// Token Flow configuration, and `all.png` into `directory`.
     @discardableResult
     public static func run(directory: String, skin: Skin, snapshot: UsageSnapshot, scale: Int,
                            stateName: String?, now: Date) throws -> Result {
@@ -52,6 +53,25 @@ public enum SnapshotRunner {
             MainRenderer.drawShade(c, skin: skin, snapshot: snapshot, state: shadeState)
         }
         try write(shadeImage, to: dir.appendingPathComponent("shade.png"), &files)
+
+        // The Token Flow window, one file per configuration: the whole point of the module is
+        // that the geometry changes with the state, and one golden cannot show that (SPEC 2.9).
+        let fieldW = Layout.Field.defaultSize.w
+        let fieldH = Layout.Field.defaultSize.h
+        for mode in FieldMode.allCases {
+            var fieldState = state
+            fieldState.fieldMode = mode
+            fieldState.fieldWidth = fieldW
+            fieldState.fieldHeight = fieldH
+            let settled = FieldRenderer.settled(snapshot: snapshot, skin: skin, mode: mode,
+                                                span: fieldState.fieldSpan, width: fieldW,
+                                                height: fieldH, now: now)
+            let image = try render(width: fieldW, height: fieldH, scale: scale) { c in
+                FieldRenderer.draw(c, skin: skin, snapshot: snapshot, state: fieldState,
+                                   field: settled.image, labels: settled.labels)
+            }
+            try write(image, to: dir.appendingPathComponent("field-\(mode.rawValue).png"), &files)
+        }
 
         // all.png: the default stacked layout, main over EQ over playlist.
         let totalH = Layout.Main.size.h + Layout.EQ.size.h + state.playlistHeight
@@ -100,6 +120,11 @@ public enum SnapshotRunner {
         state.eqRange = .hours
         state.eqMeasure = .cost
         state.eqRelative = true
+        state.fieldMode = .scope
+        state.fieldAuto = false
+        state.fieldSpan = .minutes
+        state.fieldWidth = Layout.Field.defaultSize.w
+        state.fieldHeight = Layout.Field.defaultSize.h
         return state
     }
 

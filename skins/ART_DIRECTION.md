@@ -21,14 +21,17 @@ they looked like physical objects you could touch.
 4. **Micro-detail that rewards looking.** Fasteners (with varied slot rotation), seams between
    panels, vents, engraved/silk-screened micro labels (3×5 / 4×5 fonts), serial numbers, tick scales,
    tiny warning marks, edge wear, scratches, fingerprints of use near controls, a maker's plate.
-   Aim for **25+ distinct kinds** of detail across the three windows; list them in your report.
+   Aim for **25+ distinct kinds** of detail across the windows; list them in your report.
 5. **Ramped, limited palette.** Build each material from a 5–8 step ramp (shadow → midtone →
    highlight, hue-shifted: shadows cooler/more saturated, highlights warmer/lighter). Use ordered
    dithering only where a ramp step would band visibly. Total distinct colours will be large because
    of noise, but every colour must belong to a ramp.
-6. **One object, three windows.** Main, equalizer and playlist are one family of hardware — stacked
-   components of the same system, sharing materials, fasteners, typography and lamp colours.
-   The equalizer and playlist get the same care as the main window.
+6. **One object, four windows.** Main, equalizer, playlist and Token Flow are one family of
+   hardware — stacked components of the same system, sharing materials, fasteners, typography and
+   lamp colours. The equalizer and playlist get the same care as the main window. Token Flow's
+   frame (the `gen` sheet, SPEC 3.3) is a plainer piece by design — its interior is the app's own
+   phosphor display, and the frame's job is to give that display a bezel and get out of its way —
+   but it must be recognisably the same object as the other three.
 7. **Function first.** This is a usage monitor. Time digits, marquee text, the kbps/kHz fields, the
    volume/balance gauges and the visualizer must be *instantly* legible at 2×. Highest contrast in the
    skin belongs to the displays. Labels from SPEC §5.1 must be readable.
@@ -69,10 +72,10 @@ they looked like physical objects you could touch.
 
 1. Read the toolkit README and `skins/base/theme.py` to see how a complete theme is put together.
 2. Write your palette ramps and material generators first; render swatches; look at them at 8×.
-3. Block in all three windows, build (`python3 skins/build.py <name>`), open
+3. Block in all four windows, build (`python3 skins/build.py <name>`), open
    `skins/<name>/preview/all_4x.png` with the Read tool. Get the big shapes and depth right.
 4. Then detail zone by zone. After each pass rebuild and **look**: `main_4x.png`, `eq_4x.png`,
-   `playlist_4x.png`, `shade_4x.png`, `sheets.png`. Also write yourself a crop helper that saves 8×
+   `playlist_4x.png`, `field_4x.png`, `shade_4x.png`, `sheets.png`. Also write yourself a crop helper that saves 8×
    crops of any rect, and inspect the zones you touched — 4× hides 1-px errors.
 5. Do at least **six** full critique→refine rounds. In each, write down (for yourself) the five
    weakest things in the current render, fix them, re-render. Typical weaknesses: flat/empty areas,

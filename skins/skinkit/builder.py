@@ -538,6 +538,60 @@ class _Builder:
                                 left_w=left_w, right_w=right_w, corner_w=corner_w,
                                 title_w=title_w, title_x=title_x)
 
+    def build_gen(self) -> None:
+        """The Token Flow window frame (SPEC 3.3).
+
+        Pieces are painted in *window* space at the position they will occupy in
+        a default-size window, so a theme's materials line up across the cuts
+        exactly as they do for the playlist frame.
+        """
+        t = self.t
+        F = spec.layout("field")
+        W, H = [int(v) for v in F["defaultSize"]]
+        title_h = int(F["titleHeight"])
+        bottom_h = int(F["bottomHeight"])
+        left_w = int(F["leftWidth"])
+        right_w = int(F["rightWidth"])
+        title_w = spec.sprite("gen", "GEN_TITLE_PLATE").w
+        close_r = [int(v) for v in F["closeButtonFromTopRight"]]
+        lamp_r = [int(v) for v in F["lampFromTopRight"]]
+
+        def piece(sprite_name: str, origin, painter, *args) -> Canvas:
+            r = spec.sprite("gen", sprite_name)
+            c = self.free(r.w, r.h, origin=origin, window="field", fill=t.pl_face)
+            painter(c, *args)
+            return c
+
+        self.place("gen", "GEN_TOP_LEFT",
+                   piece("GEN_TOP_LEFT", (0, 0), t.paint_gen_top_left))
+        # The tiles are painted at x=0, not at the corner width: `FieldRenderer` lays the whole
+        # top and bottom edge from x=0 and stamps the corners over it, so x=0 is the phase the
+        # app actually shows. (The playlist gets away with the corner origin only because there
+        # its corner and its tile are both 25 px wide.)
+        self.place("gen", "GEN_TOP_TILE",
+                   piece("GEN_TOP_TILE", (0, 0), t.paint_gen_top_tile))
+        self.place("gen", "GEN_TOP_RIGHT",
+                   piece("GEN_TOP_RIGHT", (W - right_w, 0), t.paint_gen_top_right))
+        self.place("gen", "GEN_TITLE_PLATE",
+                   piece("GEN_TITLE_PLATE", ((W - title_w) // 2, 0), t.paint_gen_title_plate))
+        self.place("gen", "GEN_LEFT_TILE",
+                   piece("GEN_LEFT_TILE", (0, title_h), t.paint_gen_left_tile))
+        self.place("gen", "GEN_RIGHT_TILE",
+                   piece("GEN_RIGHT_TILE", (W - right_w, title_h), t.paint_gen_right_tile))
+        self.place("gen", "GEN_BOTTOM_LEFT",
+                   piece("GEN_BOTTOM_LEFT", (0, H - bottom_h), t.paint_gen_bottom_left))
+        self.place("gen", "GEN_BOTTOM_TILE",
+                   piece("GEN_BOTTOM_TILE", (0, H - bottom_h), t.paint_gen_bottom_tile))
+        self.place("gen", "GEN_BOTTOM_RIGHT",
+                   piece("GEN_BOTTOM_RIGHT", (W - right_w, H - bottom_h), t.paint_gen_bottom_right))
+        for pressed, name in ((False, "GEN_CLOSE"), (True, "GEN_CLOSE_PRESSED")):
+            self.place("gen", name,
+                       piece(name, (W + close_r[0], close_r[1]), t.paint_gen_close, pressed))
+        for lit, name in ((True, "GEN_LAMP_ON"), (False, "GEN_LAMP_OFF")):
+            self.place("gen", name,
+                       piece(name, (W + lamp_r[0], lamp_r[1]), t.paint_gen_lamp, lit))
+
+
 
 # ---------------------------------------------------------------------------
 # text files
@@ -626,6 +680,7 @@ def build_skin(theme, out_dir, dist: Path | None = None, quiet: bool = False) ->
     b.build_main()
     b.build_eq()
     b.build_playlist()
+    b.build_gen()
 
     loose = out_dir / "out"
     loose.mkdir(parents=True, exist_ok=True)

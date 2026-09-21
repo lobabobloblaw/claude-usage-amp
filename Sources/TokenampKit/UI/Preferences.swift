@@ -28,6 +28,12 @@ public final class Preferences {
             K.pollInterval: 60.0,
             K.playlistShowsCost: true,
             K.playlistHeight: Layout.Playlist.defaultSize.h,
+            K.fieldOpen: false,
+            K.fieldMode: FieldMode.scope.rawValue,
+            K.fieldAuto: true,
+            K.fieldSpan: FieldSpan.minutes.rawValue,
+            K.fieldWidth: Layout.Field.defaultSize.w,
+            K.fieldHeight: Layout.Field.defaultSize.h,
             K.liveEnabled: true,
             K.demoData: false,
             K.menuBarReadout: false,
@@ -42,6 +48,13 @@ public final class Preferences {
         static let mainOrigin = "mainOrigin"
         static let eqOrigin = "eqOrigin"
         static let plOrigin = "plOrigin"
+        static let fieldOrigin = "fieldOrigin"
+        static let fieldOpen = "fieldOpen"
+        static let fieldMode = "fieldMode"
+        static let fieldAuto = "fieldAuto"
+        static let fieldSpan = "fieldSpan"
+        static let fieldWidth = "fieldWidth"
+        static let fieldHeight = "fieldHeight"
         static let eqOpen = "eqOpen"
         static let plOpen = "plOpen"
         static let shade = "shade"
@@ -101,6 +114,38 @@ public final class Preferences {
         set { defaults.set(newValue, forKey: K.plOpen) }
     }
 
+    /// The Token Flow window is off by default: it is a second display, not part of the stack the
+    /// app opens with (SPEC 2.9).
+    public var fieldOpen: Bool {
+        get { defaults.bool(forKey: K.fieldOpen) }
+        set { defaults.set(newValue, forKey: K.fieldOpen) }
+    }
+
+    public var fieldMode: FieldMode {
+        get { FieldMode(rawValue: defaults.string(forKey: K.fieldMode) ?? "") ?? .scope }
+        set { defaults.set(newValue.rawValue, forKey: K.fieldMode) }
+    }
+
+    public var fieldAuto: Bool {
+        get { defaults.bool(forKey: K.fieldAuto) }
+        set { defaults.set(newValue, forKey: K.fieldAuto) }
+    }
+
+    public var fieldSpan: FieldSpan {
+        get { FieldSpan(rawValue: defaults.string(forKey: K.fieldSpan) ?? "") ?? .minutes }
+        set { defaults.set(newValue.rawValue, forKey: K.fieldSpan) }
+    }
+
+    public var fieldWidth: Int {
+        get { max(Layout.Field.minSize.w, defaults.integer(forKey: K.fieldWidth)) }
+        set { defaults.set(newValue, forKey: K.fieldWidth) }
+    }
+
+    public var fieldHeight: Int {
+        get { max(Layout.Field.minSize.h, defaults.integer(forKey: K.fieldHeight)) }
+        set { defaults.set(newValue, forKey: K.fieldHeight) }
+    }
+
     public var shadeMode: Bool {
         get { defaults.bool(forKey: K.shade) }
         set { defaults.set(newValue, forKey: K.shade) }
@@ -128,12 +173,13 @@ public final class Preferences {
     }
 
     public enum WindowKey {
-        case main, equalizer, playlist
+        case main, equalizer, playlist, field
         var key: String {
             switch self {
             case .main: return K.mainOrigin
             case .equalizer: return K.eqOrigin
             case .playlist: return K.plOrigin
+            case .field: return K.fieldOrigin
             }
         }
     }
