@@ -26,6 +26,7 @@ public enum SelfTest {
         clockSkew(&runner)
         activityWindows(&runner)
         rescanAfterPartialLine(&runner)
+        shrinkingFile(&runner)
         attributionDeterminism(&runner)
         parallelScan(&runner)
         providerLifecycle(&runner)
@@ -135,6 +136,80 @@ public enum SelfTest {
             return
         }
         r.equal(reparsed, PricingTable.builtIn, "pricing.json round trip")
+        r.expect(String(decoding: PricingTable.builtIn.jsonData(), as: UTF8.self).contains("\"cacheRead\": 0.25"),
+                 "the default pricing.json spells out the Fable 5.1 cacheRead")
+
+        cacheReads(&r, resolver: resolver)
+    }
+
+    /// Cache reads (SPEC 4.2, amendment A4): 0.1x input for every model except Claude Fable 5.1,
+    /// which reads at $0.25/MTok against $10 input (0.025x).
+    static func cacheReads(_ r: inout Runner, resolver: PricingResolver) {
+        let table = PricingTable.builtIn
+        r.close(table.price(for: "claude-fable-5-1").cacheRead, 0.25, 1e-12, "fable 5.1 cache read")
+        r.close(table.price(for: "claude-fable-5").cacheRead, 1.0, 1e-12, "fable 5 cache read unchanged at 0.1x")
+        r.close(table.price(for: "claude-opus-5").cacheRead, 0.5, 1e-12, "opus 5 cache read unchanged at 0.1x")
+        r.close(table.price(for: "claude-sonnet-5").cacheRead, 0.2, 1e-12, "sonnet 5 cache read unchanged at 0.1x")
+        r.close(table.price(for: "claude-mythos-5-1").cacheRead, 1.0, 1e-12, "mythos 5.1 stays at 0.1x (rate unannounced)")
+        r.close(resolver.cost(model: "claude-fable-5-1", input: 0, output: 0, cacheWrite5m: 0, cacheWrite1h: 0,
+                              cacheRead: 1_000_000), 0.25, 1e-9, "1M Fable 5.1 cache reads cost $0.25")
+        // 10 + 50 + 12.5 + 20 + 0.25: only the cache read differs from Fable 5.
+        r.close(resolver.cost(model: "claude-fable-5-1", input: 1_000_000, output: 1_000_000, cacheWrite5m: 1_000_000,
+                              cacheWrite1h: 1_000_000, cacheRead: 1_000_000), 92.75, 1e-9, "fable 5.1 blended cost")
+        r.close(resolver.cost(model: "claude-fable-5", input: 1_000_000, output: 1_000_000, cacheWrite5m: 1_000_000,
+                              cacheWrite1h: 1_000_000, cacheRead: 1_000_000), 93.5, 1e-9, "fable 5 blended cost unchanged")
+
+        // Which ids the fable-5-1 row catches: dated, bracketed and vendor-routed 5.1 ids do,
+        // Fable 5 ids (dates always start with 2, so `fable-5-2026...` cannot) do not.
+        let fifty1 = ["claude-fable-5-1", "claude-fable-5-1-20260915", "claude-fable-5-1[1m]", "us.anthropic.claude-fable-5-1-v1:0"]
+        r.equal(fifty1.filter { table.price(for: $0).match != "fable-5-1" }, [], "Fable 5.1 ids match the fable-5-1 row")
+        let fifty = ["claude-fable-5", "claude-fable-5-20260301", "claude-fable-5[1m]"]
+        r.equal(fifty.filter { table.price(for: $0).match != "fable" }, [], "Fable 5 ids fall through to the fable row")
+        // First match wins, so a row placed after a more general one is dead. That is exactly how
+        // `fable` ahead of `fable-5-1` would silently undo the fix.
+        let shadowed = table.rows.enumerated()
+            .filter { j, later in table.rows[..<j].contains { later.match.contains($0.match) } }
+            .map { $0.element.match }
+        r.equal(shadowed, [], "every built-in row is reachable (none shadowed by an earlier, more general row)")
+
+        // pricing.json rows with and without the optional cacheRead.
+        let withField = PricingTable.parse(Data("""
+        {"models":[{"match":"fable-5-1","input":10,"output":50,"cacheRead":0.3},{"match":"fable","input":10,"output":50},{"match":"*","input":3,"output":15,"cacheRead":0.5}]}
+        """.utf8))
+        r.close(withField?.price(for: "claude-fable-5-1").cacheRead ?? -1, 0.3, 1e-12, "file row with cacheRead: the explicit price wins")
+        r.close(withField?.price(for: "claude-fable-5").cacheRead ?? -1, 1.0, 1e-12, "file row without cacheRead: Fable 5 at 0.1x")
+        r.close(withField?.price(for: "some-unknown-model").cacheRead ?? -1, 0.5, 1e-12, "fallback row with cacheRead")
+        // A row without cacheRead takes the model's built-in ratio, so a generic `fable` row cannot
+        // put Fable 5.1 back at 0.1x, and a user's own input price is still honoured.
+        let customised = PricingTable.parse(Data("""
+        {"models":[{"match":"fable","input":20,"output":100},{"match":"opus","input":5,"output":25,"cacheRead":"cheap"}]}
+        """.utf8))
+        r.close(customised?.price(for: "claude-fable-5-1").cacheRead ?? -1, 0.5, 1e-12,
+                "a generic fable row without cacheRead reads Fable 5.1 at 0.025x its own input")
+        r.close(customised?.price(for: "claude-fable-5").cacheRead ?? -1, 2.0, 1e-12, "... and Fable 5 at 0.1x")
+        r.close(customised?.price(for: "claude-opus-5").cacheRead ?? -1, 0.5, 1e-12,
+                "an unusable cacheRead is ignored, the row is kept")
+        r.equal(customised?.price(for: "claude-opus-5").match ?? "", "opus", "... and still catches its models")
+
+        // The file every existing install has: what the app wrote on first run before A4 (no
+        // cacheRead field, no fable-5-1 row). It must price every model exactly like the new table.
+        let legacy = PricingTable.parse(Data("""
+        {"models":[{"match":"fable","input":10,"output":50},{"match":"mythos","input":10,"output":50},{"match":"opus-5","input":5,"output":25},{"match":"opus-4-5","input":5,"output":25},{"match":"opus-4-6","input":5,"output":25},{"match":"opus-4-7","input":5,"output":25},{"match":"opus-4-8","input":5,"output":25},{"match":"opus","input":15,"output":75},{"match":"sonnet-5","input":2,"output":10},{"match":"sonnet","input":3,"output":15},{"match":"haiku-4","input":1,"output":5},{"match":"haiku-3-5","input":0.8,"output":4},{"match":"haiku","input":0.25,"output":1.25},{"match":"*","input":3,"output":15}]}
+        """.utf8))
+        r.expect(legacy != nil, "the pre-A4 default pricing.json parses")
+        let legacyResolver = PricingResolver(table: legacy ?? table)
+        let ids = ["claude-fable-5-1", "claude-fable-5", "claude-mythos-5-1", "claude-opus-5", "claude-opus-4-1-20250805",
+                   "claude-sonnet-5", "claude-haiku-4-5-20251001", "claude-3-haiku-20240307", "some-unknown-model"]
+        let differ = ids.filter { id in
+            let a = legacyResolver.cost(model: id, input: 1_000_000, output: 1_000_000, cacheWrite5m: 1_000_000,
+                                        cacheWrite1h: 1_000_000, cacheRead: 1_000_000)
+            let b = resolver.cost(model: id, input: 1_000_000, output: 1_000_000, cacheWrite5m: 1_000_000,
+                                  cacheWrite1h: 1_000_000, cacheRead: 1_000_000)
+            return abs(a - b) > 1e-9
+        }
+        r.equal(differ, [], "a pre-A4 pricing.json prices every model like the built-in table")
+        r.close(legacyResolver.cost(model: "claude-fable-5-1", input: 0, output: 0, cacheWrite5m: 0, cacheWrite1h: 0,
+                                    cacheRead: 1_000_000), 0.25, 1e-9, "... Fable 5.1 cache reads included")
     }
 
     // MARK: - Display names
@@ -356,7 +431,7 @@ public enum SelfTest {
         _ = scanner.tail(paths: [file.path], now: Date())
         r.equal(scanner.uniqueEventCount, 4, "re-tailing an unchanged file adds nothing")
 
-        // Line handling at the mapping-window boundary, with a deliberately tiny window so the
+        // Line handling at the read-window boundary, with a deliberately tiny window so the
         // growth and give-up paths are both exercised in a fraction of a second.
         let windowFile = dir.appendingPathComponent("window-probe.txt")
         let short = "short-line"
@@ -928,6 +1003,104 @@ public enum SelfTest {
         try? FileManager.default.setAttributes([.modificationDate: stamp], ofItemAtPath: file.path)
         scanner.fullScan(now: Date())
         r.equal(scanner.uniqueEventCount, 0, "a file that ages out of the window loses its events")
+    }
+
+    // MARK: - A file that shrinks under the reader
+
+    /// `discover()` stats a transcript and the reader opens it a moment later; the file can be
+    /// truncated or rewritten in between, or while a pass is under way. The reader used to `mmap`
+    /// the stale size, and touching a page past the new end of file raised SIGBUS and killed the
+    /// process (cases 1 and 2 both did). Now the file simply ends where it ends.
+    static func shrinkingFile(_ r: inout Runner) {
+        r.section("file shrinks while being read")
+        guard let dir = makeTempDir() else { r.expect(false, "temp dir"); return }
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let file = dir.appendingPathComponent("77777777-7777-7777-7777-777777777777.jsonl")
+        let base = Date().timeIntervalSince1970 - 600
+        // Uniform lines (fixed-width ids), so every line boundary is a multiple of `lineLen`.
+        func fixture(_ k: Int) -> String {
+            assistantLine(id: String(format: "shrink_%04d", k), ts: base, model: "claude-opus-5", output: 7)
+        }
+        let lineLen = fixture(0).utf8.count + 1
+        let count = 600                                     // ~200 KB: many 16 KB pages past any cut
+        func writeFixture() { writeLines(to: file, (0..<count).map(fixture)) }
+
+        // 1. Stale size between the stat and the read. The scanner's progress callback runs after
+        //    every candidate has been stat'd and before any is read, so the cut lands exactly there.
+        writeFixture()
+        let kept = 3
+        let scanner = TranscriptScanner(root: dir)
+        var cutDone = false
+        scanner.onFileProgress = { _, _ in
+            guard !cutDone else { return }
+            cutDone = true
+            _ = truncate(file.path, off_t(kept * lineLen + 40))     // part-way into the next line
+        }
+        scanner.fullScan(now: Date())
+        scanner.onFileProgress = nil
+        r.expect(cutDone, "the file was cut between the stat and the read")
+        r.equal(scanner.uniqueEventCount, kept, "only the whole lines left after the cut are read")
+        r.equal(Int(scanner.files[file.path]?.offset ?? 0), kept * lineLen,
+                "offset stops at the last newline before the new end of file")
+        _ = truncate(file.path, off_t(kept * lineLen))
+        append(to: file, fixture(kept) + "\n")
+        _ = scanner.tail(paths: [file.path], now: Date())
+        r.equal(scanner.uniqueEventCount, kept + 1, "tailing carries on normally after the cut")
+
+        // 2. Cut from inside the line callback, i.e. in the middle of a pass, with a small window
+        //    so the pass needs many reads. Lines already read are a consistent snapshot; the next
+        //    read finds the bytes gone and the pass ends at the last newline it actually had.
+        writeFixture()
+        let staleSize = UInt64(fileSize(file))
+        var handed = 0
+        var whole = true
+        let end = LineReader.forEachLine(path: file.path, from: 0, upTo: staleSize, window: 4_096) { line in
+            if handed == 0 { _ = truncate(file.path, off_t(lineLen)) }  // keep one line
+            handed += 1
+            if line.count != lineLen - 1 { whole = false }
+        }
+        r.expect(handed > 0 && handed < count, "the pass stops instead of reading the lost bytes: \(handed) lines")
+        r.expect(whole, "only whole lines are handed out")
+        r.equal(Int(end), handed * lineLen, "the returned offset is the newline after the last line handed out")
+        r.expect(end > UInt64(lineLen),
+                 "that offset is past the new end of file, so the scanner's size < offset rule re-reads the file")
+        // The same file, now one line long, read with the old size as the bound.
+        handed = 0
+        let staleEnd = LineReader.forEachLine(path: file.path, from: 0, upTo: staleSize) { _ in handed += 1 }
+        r.equal(Int(staleEnd), lineLen, "a stale size larger than the file is clamped to the file")
+        r.equal(handed, 1, "the one remaining line is read once")
+
+        // 3. The clamp logic itself over a scripted read: the "file" loses its tail at an exact
+        //    byte right after the first read. Five 5-byte lines, windows of 10 bytes.
+        func scripted(upTo: UInt64 = 25, shrinkTo: Int?, failing: Bool = false) -> (lines: Int, end: UInt64, reads: Int) {
+            let data = Array("aaaa\nbbbb\ncccc\ndddd\neeee\n".utf8)
+            var visible = data.count
+            var reads = 0
+            var lines = 0
+            let end = LineReader.forEachLine(from: 0, upTo: upTo, window: 10, readAt: { buffer, n, offset in
+                reads += 1
+                if failing { return -1 }
+                let o = Int(offset)
+                let got = max(0, min(n, visible - o))
+                if got > 0 { data.withUnsafeBytes { buffer.copyMemory(from: $0.baseAddress! + o, byteCount: got) } }
+                if let shrinkTo { visible = shrinkTo }
+                return got
+            }) { _ in lines += 1 }
+            return (lines, end, reads)
+        }
+        let midLine = scripted(shrinkTo: 12)
+        r.equal(midLine.lines, 2, "cut mid-line: the lines of the first read are kept")
+        r.equal(midLine.end, 10, "cut mid-line: the half line at the new end is not consumed")
+        let atBoundary = scripted(shrinkTo: 10)
+        r.equal(atBoundary.end, 10, "cut on a line boundary: stops there")
+        let belowPos = scripted(shrinkTo: 3)
+        r.equal(belowPos.end, 10, "cut below the read position: offset stays past the new end, for the scanner to reset")
+        let stale = scripted(upTo: 1_000, shrinkTo: nil)
+        r.equal(stale.lines, 5, "bound far past the data: every line read")
+        r.equal(stale.end, 25, "bound far past the data: ends at the data")
+        r.equal(stale.reads, 3, "bound far past the data: a short read ends the pass, no spinning to the bound")
+        let failed = scripted(shrinkTo: nil, failing: true)
+        r.equal(failed.end, 0, "a failing read consumes nothing")
     }
 
     // MARK: - Attribution determinism

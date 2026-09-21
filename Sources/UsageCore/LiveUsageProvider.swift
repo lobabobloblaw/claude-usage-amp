@@ -194,7 +194,7 @@ public final class LiveUsageProvider: UsageProvider {
 
     /// Stops scanning and flushes the scan cache **before returning**, so a process that exits on
     /// the next line still gets a warm start next time. A cold scan in flight is asked to abort
-    /// through `stopRequested` first — the readers check it once per mapping window — and the wait
+    /// through `stopRequested` first — the readers check it once per read window — and the wait
     /// for the cache write is capped at `flushTimeout`, so quitting can never hang the main thread.
     public func stop() {
         guard started else { return }

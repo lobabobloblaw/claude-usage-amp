@@ -1,23 +1,32 @@
 import Foundation
 
 /// One row of the pricing table: a lower-cased substring to look for in the model id, and the
-/// per-million-token input/output prices in USD.
+/// per-million-token prices in USD.
 public struct ModelPrice: Equatable {
     public var match: String
     public var input: Double
     public var output: Double
+    /// Cache-read price per million tokens, for a model whose cache reads are not the general
+    /// 0.1x input (SPEC 4.2, amendment A4: Claude Fable 5.1 reads at $0.25 against $10 input).
+    /// nil means the general rule; see `PricingTable.price(for:)` for how a nil row is resolved.
+    public var explicitCacheRead: Double?
 
-    public init(match: String, input: Double, output: Double) {
+    public init(match: String, input: Double, output: Double, cacheRead: Double? = nil) {
         self.match = match
         self.input = input
         self.output = output
+        self.explicitCacheRead = cacheRead
     }
+
+    /// The general cache-read rule: 0.1x input.
+    public static let defaultCacheReadRatio = 0.1
 
     /// Cache write, 5 minute TTL.
     public var cacheWrite5m: Double { input * 1.25 }
     /// Cache write, 1 hour TTL.
     public var cacheWrite1h: Double { input * 2 }
-    public var cacheRead: Double { input * 0.1 }
+    /// Cache read: the explicit price when the row has one, else 0.1x input.
+    public var cacheRead: Double { explicitCacheRead ?? input * ModelPrice.defaultCacheReadRatio }
 }
 
 /// Ordered list of price rows; first substring match wins, with a fallback for everything else.
@@ -30,9 +39,15 @@ public struct PricingTable: Equatable {
         self.fallback = fallback
     }
 
-    /// SPEC 4.2.
+    /// SPEC 4.2. First substring match wins, so a specific row must come before the general row
+    /// it would otherwise be shadowed by (`fable-5-1` before `fable`; the self-test checks that
+    /// every row is reachable).
     public static let builtIn = PricingTable(rows: [
+        // Claude Fable 5.1 cache reads cost $0.25/MTok, 0.025x input, not the general 0.1x.
+        // Claude Fable 5 (`claude-fable-5`, and its dated ids) falls through to `fable`.
+        ModelPrice(match: "fable-5-1", input: 10, output: 50, cacheRead: 0.25),
         ModelPrice(match: "fable", input: 10, output: 50),
+        // Claude Mythos 5.1's cache-read rate is unannounced: general rule until it is.
         ModelPrice(match: "mythos", input: 10, output: 50),
         ModelPrice(match: "opus-5", input: 5, output: 25),
         ModelPrice(match: "opus-4-5", input: 5, output: 25),
@@ -47,16 +62,36 @@ public struct PricingTable: Equatable {
         ModelPrice(match: "haiku", input: 0.25, output: 1.25),
     ])
 
+    /// The effective price for a model id: the first row whose `match` is a substring of the
+    /// lower-cased id (else the fallback), with its cache-read price resolved.
+    ///
+    /// A row without an explicit `cacheRead` does not simply mean 0.1x input. It means "this row's
+    /// input price times the cache-read ratio the built-in table has for this model id" — 0.1 for
+    /// every model except Claude Fable 5.1, whose ratio is 0.025. That is what keeps a
+    /// `pricing.json` written before amendment A4 (no `cacheRead` field, no `fable-5-1` row, its
+    /// generic `fable` row catching Fable 5.1) from pricing Fable 5.1 cache reads 4x too high, while
+    /// still honouring whatever input price the user put in that row. A row that gives `cacheRead`
+    /// explicitly always wins.
     public func price(for model: String) -> ModelPrice {
         let m = model.lowercased()
-        for row in rows where m.contains(row.match) { return row }
-        return fallback
+        var p = rows.first { m.contains($0.match) } ?? fallback
+        guard p.explicitCacheRead == nil else { return p }
+        let reference = PricingTable.builtIn.rows.first { m.contains($0.match) } ?? PricingTable.builtIn.fallback
+        if let referenceRead = reference.explicitCacheRead, reference.input > 0 {
+            p.explicitCacheRead = p.input * referenceRead / reference.input
+        }
+        return p
     }
 
     // MARK: - pricing.json
 
     /// Parse the user-overridable file. Returns nil when the file is missing or unusable, in which
     /// case the caller keeps the built-in table.
+    ///
+    /// Each row is `{match, input, output}` plus an optional `cacheRead` (USD per million tokens).
+    /// A `cacheRead` that is not a finite, non-negative number is ignored rather than dropping the
+    /// row, so a typo there cannot re-route the model to some later, differently priced row; the
+    /// row then gets the cache-read rule described at `price(for:)`.
     public static func parse(_ data: Data) -> PricingTable? {
         guard let any = try? JSONSerialization.jsonObject(with: data) else { return nil }
         var array: [Any]?
@@ -73,11 +108,13 @@ public struct PricingTable: Equatable {
                   // A hand-edited file can legally contain `1e999`; an infinite price would turn
                   // every cost in the app into `inf`.
                   input.isFinite, output.isFinite, input >= 0, output >= 0 else { continue }
+            var cacheRead: Double?
+            if let c = JSONNumber.double(d["cacheRead"]), c.isFinite, c >= 0 { cacheRead = c }
             let lower = match.lowercased()
             if lower == "*" || lower == "default" {
-                fallback = ModelPrice(match: "*", input: input, output: output)
+                fallback = ModelPrice(match: "*", input: input, output: output, cacheRead: cacheRead)
             } else {
-                rows.append(ModelPrice(match: lower, input: input, output: output))
+                rows.append(ModelPrice(match: lower, input: input, output: output, cacheRead: cacheRead))
             }
         }
         guard !rows.isEmpty else { return nil }
@@ -85,12 +122,14 @@ public struct PricingTable: Equatable {
     }
 
     public func jsonData() -> Data {
-        var s = "{\n  \"_comment\": \"Tokenamp pricing, USD per million tokens. Ordered; the first row whose 'match' is a substring of the lower-cased model id wins. Cache write 5m = 1.25x input, cache write 1h = 2x input, cache read = 0.1x input. The row matching \\\"*\\\" is the fallback.\",\n  \"models\": [\n"
+        var s = "{\n  \"_comment\": \"Tokenamp pricing, USD per million tokens. Ordered; the first row whose 'match' is a substring of the lower-cased model id wins. Cache write 5m = 1.25x input, cache write 1h = 2x input. Cache read is the row's 'cacheRead' when given; a row without it uses input x the model's built-in cache-read ratio, which is 0.1 for every model except Claude Fable 5.1 (0.025, i.e. $0.25 at $10 input). The row matching \\\"*\\\" is the fallback.\",\n  \"models\": [\n"
         var parts: [String] = []
-        for r in rows {
-            parts.append("    { \"match\": \"\(r.match)\", \"input\": \(trim(r.input)), \"output\": \(trim(r.output)) }")
+        for r in rows + [ModelPrice(match: "*", input: fallback.input, output: fallback.output,
+                                    cacheRead: fallback.explicitCacheRead)] {
+            var row = "    { \"match\": \"\(r.match)\", \"input\": \(trim(r.input)), \"output\": \(trim(r.output))"
+            if let c = r.explicitCacheRead { row += ", \"cacheRead\": \(trim(c))" }
+            parts.append(row + " }")
         }
-        parts.append("    { \"match\": \"*\", \"input\": \(trim(fallback.input)), \"output\": \(trim(fallback.output)) }")
         s += parts.joined(separator: ",\n")
         s += "\n  ]\n}\n"
         return Data(s.utf8)

@@ -220,7 +220,7 @@ final class TranscriptScanner {
 
     /// Pure: reads files off the shared state and hands back results to be merged serially.
     ///
-    /// `shouldStop` is polled before each file and, inside the reader, once per mapping window, so
+    /// `shouldStop` is polled before each file and, inside the reader, once per read window, so
     /// `stop()` during a cold scan waits for at most one window rather than for a whole batch of
     /// very large transcripts. A partially read file keeps its newline-aligned offset and picks up
     /// where it left off next time.

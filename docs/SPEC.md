@@ -20,6 +20,15 @@ It really whips the llama's tokens.
 > screen (the docked stack was 550×928 pt). Scale is now expressed in **device pixels per skin pixel**
 > so half steps are available on Retina, and the default is chosen from the screen — see §2.8. This
 > supersedes "Scale ▸ 1× 2× 3×", "scale (default 2)" and "cycles scale 1×→2×→3×" wherever they appear.
+> **A4 (2026-09-21, pricing correction):** cache reads are not 0.1× input for every model. Claude
+> Fable 5.1 (`claude-fable-5-1`) reads cache at **$0.25 per million tokens** (input $10, output $50),
+> which is 0.025× input; pricing it at 0.1× made Fable 5.1 cache-read cost about 4× too high. Claude
+> Fable 5 (`claude-fable-5`) and every other model keep 0.1×. Claude Mythos 5.1's cache-read rate is
+> unannounced, so it stays at 0.1× until it is announced. The built-in table gains a `fable-5-1` row
+> with an explicit cache-read price, ordered before `fable`, and `pricing.json` rows gain an optional
+> `cacheRead` field. A row without that field uses the model's built-in cache-read ratio, so a file
+> written before A4 is priced correctly without being rewritten. See §4.2. This supersedes "cache
+> read = 0.1× input" wherever it appears.
 
 Toolchain on this machine: Swift 6.3 via Command Line Tools only. **No Xcode, no XCTest, no
 xcodebuild.** Everything builds with `swift build` and a shell script assembles the `.app`.
@@ -369,25 +378,45 @@ Implements `UsageProvider` as `LiveUsageProvider` and fills every field of `Usag
   counts, ids, model names, timestamps and token numbers. Do not open transcript files with the Read
   tool; work with aggregate output from your own code.
 
-### 4.2 Pricing (API-equivalent cost)
+### 4.2 Pricing (API-equivalent cost) (amendment A4)
 
-Per million tokens, input / output; cache write 5 m = 1.25× input, cache write 1 h = 2× input,
-cache read = 0.1× input. Match on lower-cased model id substring, first match wins:
+Per million tokens, USD. Cache write 5 m = 1.25× input, cache write 1 h = 2× input. Cache read =
+0.1× input, **except for Claude Fable 5.1, whose cache reads cost $0.25 (0.025× its $10 input)**.
+The row carries that exception as an explicit cache-read price. Match on the lower-cased model id
+as a substring; the first match wins, so a specific row must come before any more general row that
+would also match it:
 
-| match | in | out |
-|---|---|---|
-| `fable`, `mythos` | 10 | 50 |
-| `opus-5`, `opus-4-5`, `opus-4-6`, `opus-4-7`, `opus-4-8` | 5 | 25 |
-| `opus` (older) | 15 | 75 |
-| `sonnet-5` | 2 | 10 |
-| `sonnet` | 3 | 15 |
-| `haiku-4` | 1 | 5 |
-| `haiku-3-5` | 0.8 | 4 |
-| `haiku` | 0.25 | 1.25 |
-| anything else | 3 | 15 |
+| match | in | out | cache read |
+|---|---|---|---|
+| `fable-5-1` | 10 | 50 | **0.25** (explicit) |
+| `fable`, `mythos` | 10 | 50 | 1 (0.1×) |
+| `opus-5`, `opus-4-5`, `opus-4-6`, `opus-4-7`, `opus-4-8` | 5 | 25 | 0.5 (0.1×) |
+| `opus` (older) | 15 | 75 | 1.5 (0.1×) |
+| `sonnet-5` | 2 | 10 | 0.2 (0.1×) |
+| `sonnet` | 3 | 15 | 0.3 (0.1×) |
+| `haiku-4` | 1 | 5 | 0.1 (0.1×) |
+| `haiku-3-5` | 0.8 | 4 | 0.08 (0.1×) |
+| `haiku` | 0.25 | 1.25 | 0.025 (0.1×) |
+| anything else | 3 | 15 | 0.3 (0.1×) |
+
+The `fable-5-1` row matches `claude-fable-5-1` and its dated, `[1m]` and vendor-prefixed variants.
+`claude-fable-5` and its dated ids (`claude-fable-5-2…`) do not match it and fall through to
+`fable`. Claude Mythos 5.1's cache-read rate is unannounced, so it stays at 0.1× until it is announced.
 
 User-overridable: if `~/Library/Application Support/Tokenamp/pricing.json` exists it replaces the
-table (same shape: ordered list of `{match, input, output}`); write the default file on first run.
+table. It has the same shape: an ordered list of `{match, input, output}` rows, each with an
+optional `cacheRead` (USD per million tokens), and a row matching `*` is the fallback. Write the
+default file on first run, and never rewrite an existing one. Cache reads for a row are priced as
+follows:
+
+- A row that gives `cacheRead` uses it.
+- A row without it uses its own `input` × the **built-in cache-read ratio of the model id being
+  priced**: 0.1 for every model, and 0.025 for Fable 5.1.
+
+That second rule keeps a file written before A4 correct. Such a file has no `cacheRead` field, no
+`fable-5-1` row, and a generic `fable` row that catches Fable 5.1. Under the rule it still prices
+Fable 5.1 cache reads at 0.025×, not 4× too high, and it keeps whatever input price the user set.
+A `cacheRead` that is not a finite, non-negative number is ignored and the row is kept.
 When the 5 m / 1 h split is absent, price all cache writes at the 5 m rate.
 Display names: `claude-fable-5-1` → `FABLE 5.1`, `claude-opus-5` → `OPUS 5`,
 `claude-haiku-4-5-20251001` → `HAIKU 4.5` (strip `claude-`, strip a trailing 8-digit date, family
