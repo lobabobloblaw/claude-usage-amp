@@ -55,7 +55,7 @@ class PlaylistMixin:
         limb of the terminal bezel: lit edge, face, wall in shadow, gasket, and
         the first -- darkest -- row of glass."""
         s = self.seed + 200
-        X.title_strip_base(c, active, seed=s, wrap_px=PX, rows=14, full=True)
+        X.title_strip_base(c, active, seed=s, wrap_px=PX, rows=14)
         v = c.sub(0, 14, c.w, 6)
         M.put_rgb(v, M.tone_rgb(_cast_wrap(v, s, "x"), P.GUN_LUT))
         M.hl(c, 0, c.w - 1, 14, P.GUN[7], 0.8)
