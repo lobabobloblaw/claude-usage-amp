@@ -1,6 +1,10 @@
-# Tokenamp
+<p align="center">
+  <img src="docs/images/icon.png" width="128" alt="">
+</p>
 
-Your Claude plan usage, as a Winamp 2.x player.
+<h1 align="center">Tokenamp</h1>
+
+<p align="center"><em>Your Claude plan usage, as a Winamp 2.x player.</em></p>
 
 Tokenamp is a native macOS app that reads how much of your Claude plan you have
 used — the 5-hour session window, the weekly limits, and the token flow through
