@@ -23,7 +23,8 @@ straight into Tokenamp.
 
 ## Token Flow
 
-A fourth window, opened from the **V** button on the clutterbar. It is a vector
+A fourth window, open by default and toggled from the **V** button on the
+clutterbar. It is a vector
 phosphor display — a beam that accumulates into a buffer and decays, so it is
 bright where it lingers and faint where it flies — drawn in skin pixels and
 coloured entirely from the skin's own `viscolor.txt`. It has five

@@ -26,7 +26,15 @@ public final class DockingManager {
     }
 
     /// Remember which windows are docked to `anchor` so they can travel with it.
+    ///
+    /// Only the main window carries its group (SPEC 2.7). A sub-window that picked up followers
+    /// would be impossible to pull out of a docked stack: dragging it would move everything it
+    /// touches, so it would never appear to move at all.
     public func beginDrag(anchor: SkinWindow) {
+        guard anchor === main else {
+            followers = []
+            return
+        }
         let others = allWindows.filter { $0 !== anchor }
         let frames = others.map { $0.frame }
         let group = Docking.dockedGroup(anchor: anchor.frame, frames: frames)
@@ -63,7 +71,8 @@ public final class DockingManager {
         window.setFrameOrigin(snapped)
     }
 
-    /// Default placement: main at the top, EQ under it, playlist under the EQ (SPEC 2.7).
+    /// Default placement: main at the top, EQ under it, playlist under the EQ, and Token Flow
+    /// alongside the stack (SPEC 2.7).
     public func applyDefaultLayout() {
         guard let main else { return }
         let screen = screenFrame(for: main) ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
@@ -75,6 +84,15 @@ public final class DockingManager {
         main.setFrameOrigin(stack.main)
         equalizer?.setFrameOrigin(stack.eq)
         playlist?.setFrameOrigin(stack.playlist)
+        placeFieldBesideMain()
+    }
+
+    /// Token Flow's default home: hung off the main window's right-hand edge, top-aligned, where
+    /// there is room for a second display without making the stack any taller.
+    public func placeFieldBesideMain() {
+        guard let main, let field else { return }
+        let width = CGFloat(Layout.Main.size.w) * CGFloat(max(ScaleModel.minPoints, scale))
+        field.setTopLeft(CGPoint(x: main.frame.minX + width, y: main.frame.maxY))
     }
 
     private func playlistSkinHeight() -> Int {

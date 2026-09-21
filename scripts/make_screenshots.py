@@ -6,7 +6,8 @@ app draws -- offscreen, so it needs no Screen Recording permission.
 
     python3 scripts/make_screenshots.py
 
-Writes ``docs/images/hero.png`` (one skin's full window stack),
+Writes ``docs/images/hero.png`` (one skin's default layout: the stack plus
+Token Flow beside it),
 ``docs/images/skins.png`` (every skin's main window, stacked),
 ``docs/images/flow.png`` (the Token Flow window, one configuration per skin) and
 ``docs/images/icon.png`` (the app icon, for the README's header).
@@ -62,6 +63,16 @@ def stack(images: list[Image.Image], gap: int) -> Image.Image:
     return out
 
 
+def beside(left: Image.Image, right: Image.Image, gap: int) -> Image.Image:
+    """Two images side by side, top-aligned, on one padded background."""
+    w = left.width + right.width + gap + PAD * 2
+    h = max(left.height, right.height) + PAD * 2
+    out = Image.new("RGB", (w, h), BG)
+    out.paste(left, (PAD, PAD))
+    out.paste(right, (PAD + left.width + gap, PAD))
+    return out
+
+
 def grid(images: list[Image.Image], per_row: int, gap: int) -> Image.Image:
     rows = [images[i:i + per_row] for i in range(0, len(images), per_row)]
     row_w = [sum(im.width for im in r) + gap * (len(r) - 1) for r in rows]
@@ -102,7 +113,9 @@ def main() -> None:
         shots = {s: snapshot(s, tmp / s) for s in SKINS}
 
         hero = shots[HERO]
-        stack([hero["main"], hero["eq"], hero["playlist"]], gap=0).save(OUT / "hero.png")
+        # The default layout: main/eq/playlist stacked, Token Flow alongside, top-aligned.
+        column = stack([hero["main"], hero["eq"], hero["playlist"]], gap=0)
+        beside(column, hero["field-scope"], gap=PAD).save(OUT / "hero.png")
         print(f"wrote {OUT / 'hero.png'}")
 
         stack([shots[s]["main"] for s in SKINS], gap=PAD).save(OUT / "skins.png")

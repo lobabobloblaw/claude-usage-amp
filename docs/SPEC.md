@@ -122,7 +122,9 @@ A shaded, always-on-top strip is the app's "glanceable" form, so it must work we
 
 ### 2.9 Token Flow window (275x232 default, resizable in 25x29 px steps) - the visualiser module (amendment A3)
 
-A fourth window, off by default, opened from the clutterbar **V** button or Windows > Token Flow.
+A fourth window, **open by default** and toggled from the clutterbar **V** button (which lights
+while it is open) or Windows > Token Flow. It opens beside the stack rather than extending it, so
+the default layout is no taller than it was: a window nobody knows about is a window nobody opens.
 Its frame comes from the `gen` sheet (§3.3) and its interior is one **phosphor field** (§3.3) drawn
 in skin pixels through the skin's own `viscolor.txt`.
 
@@ -186,7 +188,11 @@ onto any window loads it as the skin and copies it into the user skins folder
 Borderless, non-resizable (except playlist height) windows. While dragging, a window snaps when any
 edge comes within 8 skin-px·scale of another Tokenamp window's edge or of the screen's visible frame.
 Windows that are docked to the main window (edge-adjacent, transitively) move with it when the main
-window is dragged. Default placement: EQ directly under main, playlist under EQ.
+window is dragged. **Only the main window carries its group**: a sub-window that dragged its
+neighbours along could never be pulled out of a stack, because everything it touched would move with
+it and it would never appear to move at all. Default placement: EQ directly under main, playlist
+under EQ, Token Flow hung off the main window's right-hand edge and top-aligned with it. A window
+with no stored origin is placed at its default every launch, not only on a first run.
 
 ### 2.8 Scale (amendment A2)
 

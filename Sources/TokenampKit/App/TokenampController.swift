@@ -422,12 +422,10 @@ public final class TokenampController: NSObject {
         setAnimating(true)
     }
 
-    /// The first time the window is opened it has no stored origin: hang it off the right-hand
-    /// edge of the main window, where there is room for a second display.
+    /// A window with no stored origin goes to its default home beside the main window.
     private func placeFieldIfUnplaced() {
-        guard prefs.origin(.field) == nil, let main = mainWindow?.window else { return }
-        field.window.setTopLeft(CGPoint(x: main.frame.maxX, y: main.frame.maxY))
-        docking.settle(field.window)
+        guard prefs.origin(.field) == nil else { return }
+        docking.placeFieldBesideMain()
     }
 
     /// Flow per session id for the connectome, 0...1.
@@ -696,8 +694,13 @@ public final class TokenampController: NSObject {
         } else {
             docking.applyDefaultLayout()
         }
-        // The Token Flow window is not part of the default stack, so it restores on its own.
-        if let f = prefs.origin(.field) { field.window.setFrameOrigin(f) }
+        // Token Flow restores on its own, and gets its default home when it has none - which is
+        // every launch before it had ever been opened, not just a first run.
+        if let f = prefs.origin(.field) {
+            field.window.setFrameOrigin(f)
+        } else {
+            docking.placeFieldBesideMain()
+        }
         clampOnScreen()
     }
 

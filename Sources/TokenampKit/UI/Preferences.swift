@@ -28,7 +28,7 @@ public final class Preferences {
             K.pollInterval: 60.0,
             K.playlistShowsCost: true,
             K.playlistHeight: Layout.Playlist.defaultSize.h,
-            K.fieldOpen: false,
+            K.fieldOpen: true,
             K.fieldMode: FieldMode.scope.rawValue,
             K.fieldAuto: true,
             K.fieldSpan: FieldSpan.minutes.rawValue,
@@ -114,8 +114,9 @@ public final class Preferences {
         set { defaults.set(newValue, forKey: K.plOpen) }
     }
 
-    /// The Token Flow window is off by default: it is a second display, not part of the stack the
-    /// app opens with (SPEC 2.9).
+    /// Token Flow opens with the app: a window nobody knows about is a window nobody opens
+    /// (SPEC 2.9). It sits beside the stack rather than extending it, so the default layout is no
+    /// taller than it was.
     public var fieldOpen: Bool {
         get { defaults.bool(forKey: K.fieldOpen) }
         set { defaults.set(newValue, forKey: K.fieldOpen) }
