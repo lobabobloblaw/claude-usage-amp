@@ -73,7 +73,8 @@ public enum SnapshotRunner {
             try write(image, to: dir.appendingPathComponent("field-\(mode.rawValue).png"), &files)
         }
 
-        // all.png: the default stacked layout, main over EQ over playlist.
+        // all.png: the three classic windows stacked, main over EQ over playlist (a contact sheet,
+        // not the default layout, which is main / Sessions / Token Flow with the EQ closed).
         let totalH = Layout.Main.size.h + Layout.EQ.size.h + state.playlistHeight
         let allImage = try render(width: Layout.Main.size.w, height: totalH, scale: scale) { c in
             MainRenderer.draw(c, skin: skin, snapshot: snapshot, state: state)

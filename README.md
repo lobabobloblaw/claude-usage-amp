@@ -162,8 +162,8 @@ There is no XCTest here (Command Line Tools only), so the suites are built into
 the binaries:
 
 ```sh
-build/Tokenamp.app/Contents/MacOS/Tokenamp --selftest   # 342 checks
-swift run usage-dump --selftest                         # 774 checks
+build/Tokenamp.app/Contents/MacOS/Tokenamp --selftest   # 630 checks
+swift run usage-dump --selftest                         # 950 checks
 cd skins && python3 -m skinkit.selftest                 # 37 checks
 ```
 

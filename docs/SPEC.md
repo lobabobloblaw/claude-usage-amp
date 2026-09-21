@@ -15,7 +15,7 @@ It really whips the llama's tokens.
 > **A3 (2026-09-20, user request):** the visualiser is no longer only a strip in the faceplate.
 > It also has a window of its own, **Token Flow** - a vector phosphor field with five configurations
 > that the state of the account modulates and can switch between on its own. See §2.9 and §3.3. The
-> faceplate well in §2.1 is unchanged; the new window is an addition, off by default.
+> faceplate well in §2.1 is unchanged; the new window is an addition, open by default (§2.9).
 > **A2 (2026-09-20, user feedback):** a fixed 2× default is far too large on a 1920×1200-point HiDPI
 > screen (the docked stack was 550×928 pt). Scale is now expressed in **device pixels per skin pixel**
 > so half steps are available on Retina, and the default is chosen from the screen — see §2.8. This
@@ -33,6 +33,13 @@ It really whips the llama's tokens.
 > responses (earliest sighting wins) and whole-response eviction (§4.1); Opus 5 fast mode priced at
 > 2× and the 3.5 Haiku row fixed (§4.2); expired limits roll to 0 % with a poll just after the
 > reset, 403 is an error with backoff, `Retry-After` honoured up to 6 h (§4.3). Scan cache v2.
+> **A6 (2026-09-21, UI corrections):** window positions persist as **top-left corners** (every resize
+> keeps the top-left fixed; older bottom-left origins are migrated once) (§2.6). AppKit keeps window
+> origins on whole points, so a half-point art edge cannot be met exactly: docking works on the art
+> rectangles and rounds each origin *towards* its neighbour, so docked windows touch or overlap by at
+> most one device pixel and never gap (§2.8). The phosphor beam lights whole pixels instead of
+> splatting bilinearly, and the Token Flow window is capped at 1000×725 skin pixels (§3.3). Limit
+> alerts are recorded in a persisted ledger (limit id, reset minute, threshold).
 
 Toolchain on this machine: Swift 6.3 via Command Line Tools only. **No Xcode, no XCTest, no
 xcodebuild.** Everything builds with `swift build` and a shell script assembles the `.app`.
@@ -198,9 +205,9 @@ Poll Every ▸ 30 s / 1 min / 2 min / 5 min, Playlist Shows ▸ Cost / Tokens, D
 Menu Bar Readout (toggle; an `NSStatusItem` showing `42%·2h47m`) · About Tokenamp · Quit.
 
 The app is a regular Dock app with a minimal main menu (About, Quit ⌘Q, Window). Persist in
-`UserDefaults`: skin path, scale (default 2), window origins, which windows are open, shade state,
+`UserDefaults`: skin path, scale (default chosen per screen, §2.8), window top-left corners (A6), which windows are open, shade state,
 always-on-top, toggles, visualizer mode, EQ range/measure, poll interval, and the Token Flow
-window's origin, size, open state, configuration, AUTO and span. Dropping a `.wsz`/`.zip`/folder
+window's top-left corner, size, open state, configuration, AUTO and span. Dropping a `.wsz`/`.zip`/folder
 onto any window loads it as the skin and copies it into the user skins folder
 `~/Library/Application Support/Tokenamp/Skins/`.
 
@@ -234,7 +241,8 @@ landing on top of another window.
   overwriting the stored preference.
 - Window content size is `ceil(skinSize × s)` points (275×1.5 = 412.5 → 413); windows are
   non-opaque with a clear background so the spare half-point column is invisible. Docking/snap maths
-  uses the exact scaled skin size, not the rounded window size, so docked windows stay pixel-flush.
+  uses the exact scaled skin size, not the rounded window size, so docked windows stay pixel-flush
+  (to within one device pixel of overlap, never a gap: window origins are whole points, A6).
 - Changing scale keeps the main window's top-left corner fixed and re-lays-out docked windows so
   they stay docked. If the stack would extend past the visible frame, shift it back on screen.
 - `--snapshot … --scale N` takes `ppsp` directly (PNG pixels per skin pixel, integer ≥ 1).
@@ -320,7 +328,8 @@ core has to be the *darkest* ink, or the trace reads as vanishing into the paper
 - Energy is deposited **per unit of beam path**, so a long sweep and a short one read the same per
   pixel, and it is scaled by `1 - decay`, so persistence changes the length of the tail and not the
   brightness of a settled field.
-- Curves are Catmull-Rom sampled at a fixed parametric rate and splatted bilinearly, so the beam is
+- Curves are Catmull-Rom sampled at a fixed parametric rate and stepped one whole pixel at a time
+  (A6: no bilinear splat, so a line is one skin pixel thick and stays crisp when scaled), so the beam is
   bright where it lingers and faint where it flies - the dwell brightness of a real vector display,
   and the reason an oscilloscope, a histogram and a connectome read as one instrument.
 - `FieldRenderer.settle` runs the accumulator to convergence over a fixed frame count, with the
@@ -338,7 +347,8 @@ Tokenamp --snapshot <outdir> [--skin <path>] [--scale N] [--demo] [--at <unix-se
 Renders, without showing any window or needing Screen Recording permission, PNG files:
 `main.png`, `eq.png`, `playlist.png`, `shade.png`, one `field-<configuration>.png` per Token Flow
 configuration (§2.9 - one golden cannot show a display whose geometry changes with the state), plus
-`all.png` (the three windows docked vertically, main/eq/playlist, as they appear by default). `--demo` uses
+`all.png` (main, equalizer and Sessions docked vertically: a contact sheet of the three classic
+windows, not the default layout, which is main/Sessions/Token Flow with the equalizer closed). `--demo` uses
 `DemoUsageProvider(frozenAt:)` (default `--at` = `DemoUsageProvider.referenceDate`) so output is
 reproducible. `--state pressed` renders with play + EQ toggle + volume thumb in their pressed/selected
 variants (exercises the alternate sprites). Visualizer bars render at their settled target heights
@@ -355,7 +365,7 @@ Implements `UsageProvider` as `LiveUsageProvider` and fills every field of `Usag
   including `<session-uuid>/subagents/**/*.jsonl`. Volume on this machine: ~1,900 files / 5.6 GB
   total, **3.4 GB modified in the last 10 days, 1.5 GB in the last 24 h**. Scanning must therefore:
   only consider files with mtime within the last 10 days; process newest first so today's data shows
-  within a second or two; run off the main thread; stream/memory-map rather than load + split whole
+  within a second or two; run off the main thread; read in bounded windows (`pread`) rather than load + split whole
   files as Strings; and **pre-filter by bytes** — only lines containing both `"type":"assistant"` and
   `"usage"` are JSON-parsed (the multi-megabyte lines are tool results on `user` lines; never parse those).
 - A usage event comes from a line with `type == "assistant"` and a `message.usage` object:
