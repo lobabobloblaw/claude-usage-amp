@@ -70,6 +70,7 @@ public enum SelfTest {
         docking(c)
         scaleModel(c)
         windowPositions(c, tmp: tmp)
+        tokenFlowPixels(c)
         playlistGeometry(c)
         tokenFlow(c)
         fontMap(c)

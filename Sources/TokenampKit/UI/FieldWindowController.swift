@@ -16,17 +16,21 @@ public final class FieldWindowController: NSObject, SkinViewDelegate, NSWindowDe
 
     private let field: PhosphorField
     private var labels: [FieldLabel] = []
+    /// True when `labels` are already written into `image` (see `render`).
+    private var labelsBaked = false
     private var image: CGImage?
     private var elapsed: TimeInterval = 0
     private var director = FieldDirector()
+
+    private var scroll = ScrollStepper()
 
     private var draggingStarted = false
     private var resizing = false
     private var resizeStartSize = SkinPair(0, 0)
     private var resizeStartMouse = CGPoint.zero
 
-    private var skinWidth: Int { app.prefs.fieldWidth }
-    private var skinHeight: Int { app.prefs.fieldHeight }
+    private var skinWidth: Int { min(app.prefs.fieldWidth, FieldRenderer.maxSize.w) }
+    private var skinHeight: Int { min(app.prefs.fieldHeight, FieldRenderer.maxSize.h) }
 
     /// What is actually on screen right now: AUTO's choice, or the user's.
     public private(set) var mode: FieldMode
@@ -34,6 +38,9 @@ public final class FieldWindowController: NSObject, SkinViewDelegate, NSWindowDe
     init(app: TokenampController) {
         self.app = app
         let scale = app.scale
+        // A size saved before the window had a ceiling comes back down to it.
+        if app.prefs.fieldWidth > FieldRenderer.maxSize.w { app.prefs.fieldWidth = FieldRenderer.maxSize.w }
+        if app.prefs.fieldHeight > FieldRenderer.maxSize.h { app.prefs.fieldHeight = FieldRenderer.maxSize.h }
         let size = SkinPair(app.prefs.fieldWidth, app.prefs.fieldHeight)
         mode = app.prefs.fieldMode
         window = SkinWindow(skinSize: size, scale: scale, title: "Token Flow")
@@ -59,6 +66,10 @@ public final class FieldWindowController: NSObject, SkinViewDelegate, NSWindowDe
 
     var isVisible: Bool { window.isVisible }
 
+    /// On screen and at least partly uncovered: a window behind another one, on another Space or
+    /// minimised is `isVisible` all the same, and has nobody to animate for.
+    private var isShowing: Bool { window.isVisible && window.occlusionState.contains(.visible) }
+
     func skinChanged() {
         image = nil
         view.needsDisplay = true
@@ -76,7 +87,7 @@ public final class FieldWindowController: NSObject, SkinViewDelegate, NSWindowDe
     /// One frame: fade the field, draw this instant's geometry into it, and hand the view a new
     /// image. Called from the app's single 30 fps clock, and only while the window is on screen.
     func animate(dt: TimeInterval) {
-        guard window.isVisible else { return }
+        guard isShowing else { return }
         let now = Date()
         let snapshot = app.snapshot
         let mods = FieldModulators(snapshot: snapshot, now: now)
@@ -94,10 +105,32 @@ public final class FieldWindowController: NSObject, SkinViewDelegate, NSWindowDe
         field.decay(dt: dt, persistence: mods.tail(for: mode))
         labels = FieldGeometry.draw(mode, into: field, snapshot: snapshot, mods: mods,
                                     span: app.prefs.fieldSpan, flows: app.sessionFlows(now: now),
-                                    t: elapsed, now: now)
+                                    t: elapsed, now: now, metrics: FieldRenderer.labelMetrics(for: app.skin))
         FieldGeometry.drawGraticule(field, mode, mods)
-        image = field.makeImage(skin: app.skin, pressure: mods.pressure)
+        // A frame identical to the last one (a settled plot) is not redrawn.
+        guard render(pressure: mods.pressure, onlyIfChanged: true) else { return }
         view.setNeedsDisplay(skinRect: FieldRenderer.canvasRect(width: skinWidth, height: skinHeight))
+    }
+
+    /// Turn the buffer into the image the view draws, with the labels written into it in skin
+    /// pixels: one image to copy per frame rather than one plus a blit for every glyph. False
+    /// when `onlyIfChanged` and the frame is the one already on screen.
+    @discardableResult
+    private func render(pressure: Double, onlyIfChanged: Bool = false) -> Bool {
+        let skin = app.skin
+        let set = labels
+        var baked = false
+        let bake: (PhosphorField.Overlay) -> Void = { overlay in
+            baked = FieldRenderer.bake(set, skin: skin, into: overlay)
+        }
+        let next = onlyIfChanged && image != nil
+            ? field.makeImageIfChanged(skin: skin, pressure: pressure, overlay: bake)
+            : field.makeImage(skin: skin, pressure: pressure, overlay: bake)
+        // Labels the frame could not carry are drawn by the view, and may have moved.
+        guard let next else { return !baked }
+        image = next
+        labelsBaked = baked
+        return true
     }
 
     /// The bottom bar quotes the burn rate and the tightest limit; they change with the data, not
@@ -111,8 +144,8 @@ public final class FieldWindowController: NSObject, SkinViewDelegate, NSWindowDe
     /// Stop empties the display, the way the faceplate visualiser decays to nothing (SPEC 2.1).
     func silence() {
         field.clear()
-        image = field.makeImage(skin: app.skin, pressure: 0)
         labels = []
+        render(pressure: 0)
         view.needsDisplay = true
     }
 
@@ -124,9 +157,10 @@ public final class FieldWindowController: NSObject, SkinViewDelegate, NSWindowDe
     func settle() {
         let now = Date()
         labels = FieldRenderer.settle(into: field, snapshot: app.snapshot, mode: mode,
-                                      span: app.prefs.fieldSpan, now: now)
+                                      span: app.prefs.fieldSpan, now: now,
+                                      metrics: FieldRenderer.labelMetrics(for: app.skin))
         let mods = FieldModulators(snapshot: app.snapshot, now: now)
-        image = field.makeImage(skin: app.skin, pressure: mods.pressure)
+        render(pressure: mods.pressure)
         view.needsDisplay = true
     }
 
@@ -180,7 +214,7 @@ public final class FieldWindowController: NSObject, SkinViewDelegate, NSWindowDe
         s.fieldWidth = skinWidth
         s.fieldHeight = skinHeight
         FieldRenderer.draw(canvas, skin: app.skin, snapshot: app.snapshot, state: s,
-                           field: image, labels: labels)
+                           field: image, labels: labelsBaked ? [] : labels)
     }
 
     public func skinView(_ view: SkinView, didPress id: ControlID, at point: CGPoint, clickCount: Int) {
@@ -221,9 +255,26 @@ public final class FieldWindowController: NSObject, SkinViewDelegate, NSWindowDe
         }
     }
 
+    /// The wheel steps the STRATA span. A mouse wheel steps once per notch; a trackpad swipe
+    /// arrives as a stream of small deltas followed by momentum, and steps once per gesture once
+    /// it has travelled far enough - otherwise one flick would cycle through every span.
     public func skinView(_ view: SkinView, scrollBy delta: CGFloat) {
-        guard mode == .strata, abs(delta) > 0.5 else { return }
-        setSpan(delta > 0 ? app.prefs.fieldSpan.previous : app.prefs.fieldSpan.next)
+        guard mode == .strata else { return }
+        let event = NSApp.currentEvent
+        let input: ScrollStepper.Input
+        if let event, event.type == .scrollWheel {
+            input = ScrollStepper.Input(delta: Double(delta),
+                                        precise: event.hasPreciseScrollingDeltas,
+                                        began: event.phase.contains(.began) || event.phase.contains(.mayBegin),
+                                        ended: event.phase.contains(.ended) || event.phase.contains(.cancelled),
+                                        momentum: event.momentumPhase != [])
+        } else {
+            input = ScrollStepper.Input(delta: Double(delta), precise: false, began: false,
+                                        ended: false, momentum: false)
+        }
+        let step = scroll.feed(input)
+        guard step != 0 else { return }
+        setSpan(step > 0 ? app.prefs.fieldSpan.previous : app.prefs.fieldSpan.next)
     }
 
     public func skinView(_ view: SkinView, hoverChanged id: ControlID?) { app.setHover(id) }
@@ -293,4 +344,73 @@ public final class FieldWindowController: NSObject, SkinViewDelegate, NSWindowDe
         view.needsDisplay = true
     }
     public func windowDidMove(_ notification: Notification) { app.saveWindowPositions() }
+
+    /// Uncovered again: the buffer stopped while nobody could see it, so bring it straight to a
+    /// settled picture rather than letting it build back up from stale.
+    public func windowDidChangeOcclusionState(_ notification: Notification) {
+        guard isShowing else { return }
+        settle()
+    }
+}
+
+/// Turns scroll events into span steps (SPEC 2.9: "the wheel changes the STRATA span").
+///
+/// A classic wheel sends one event per notch, and each notch is one step. A trackpad sends a
+/// gesture - a began, a run of small precise deltas, an end - and then a tail of momentum events
+/// that are not the user's hand at all. Steps come from the gesture only: the deltas accumulate,
+/// and the first time they pass `threshold` the gesture steps once and is spent until the next
+/// one begins. Pure, so the self-test can drive it.
+public struct ScrollStepper {
+    public struct Input {
+        public var delta: Double
+        public var precise: Bool
+        public var began: Bool
+        public var ended: Bool
+        public var momentum: Bool
+
+        public init(delta: Double, precise: Bool, began: Bool, ended: Bool, momentum: Bool) {
+            self.delta = delta
+            self.precise = precise
+            self.began = began
+            self.ended = ended
+            self.momentum = momentum
+        }
+    }
+
+    /// Points of precise travel that count as a deliberate swipe.
+    public static let threshold = 24.0
+
+    private var accumulated = 0.0
+    private var spent = false
+
+    public init() {}
+
+    /// +1 (wheel up / swipe down the content), -1, or 0 for no step.
+    public mutating func feed(_ e: Input) -> Int {
+        if e.momentum { return 0 }
+        if !e.precise {
+            accumulated = 0
+            spent = false
+            // The same half-line dead zone the wheel always had.
+            guard abs(e.delta) > 0.5 else { return 0 }
+            return e.delta > 0 ? 1 : -1
+        }
+        if e.began {
+            accumulated = 0
+            spent = false
+        }
+        var step = 0
+        if !spent {
+            accumulated += e.delta
+            if abs(accumulated) >= ScrollStepper.threshold {
+                step = accumulated > 0 ? 1 : -1
+                spent = true
+            }
+        }
+        if e.ended {
+            accumulated = 0
+            spent = false
+        }
+        return step
+    }
 }

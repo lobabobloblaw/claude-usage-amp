@@ -65,10 +65,14 @@ public final class PlaylistFont {
         var isBlank: Bool { left > right }
     }
     private let extents: [Extent]
+    /// Ink rows of each cell at `hardInkThreshold`; `top > bottom` means the cell is blank.
+    private let hardRows: [(top: Int, bottom: Int)]
 
     private struct GlyphKey: Hashable {
         let cell: Int
         let tint: UInt32
+        /// Cut hard at `hardInkThreshold` (Token Flow labels) rather than composited by coverage.
+        let hard: Bool
     }
     private var glyphCache: [GlyphKey: CGImage?] = [:]
     private let lock = NSLock()
@@ -111,6 +115,24 @@ public final class PlaylistFont {
             ext.append(Extent(left: left, right: right))
         }
         extents = ext
+
+        // The rows each cell inks at the same half-coverage cut, for Token Flow's hard labels.
+        var rows: [(top: Int, bottom: Int)] = []
+        rows.reserveCapacity(PlaylistFont.cellCount)
+        for k in 0..<PlaylistFont.cellCount {
+            let cx = (k % PlaylistFont.columns) * cellW
+            let cy = (k / PlaylistFont.columns) * cellH
+            var top = cellH, bottom = -1
+            for y in 0..<cellH {
+                for x in 0..<cellW where Int(cov[(cy + y) * w + cx + x]) >= PlaylistFont.hardInkThreshold {
+                    if y < top { top = y }
+                    bottom = y
+                    break
+                }
+            }
+            rows.append((top: top, bottom: bottom))
+        }
+        hardRows = rows
     }
 
     /// Premultiplied RGBA of the sheet over a transparent black backdrop: for a pixel of colour C
@@ -214,9 +236,9 @@ public final class PlaylistFont {
     /// One tinted glyph plus where to put it relative to the pen.
     /// SPEC 3.2: the blitted source columns are `[L-1, R+1]` clipped to the cell, placed at `pen-1`,
     /// so a one-pixel halo survives and simply overlaps the spacing.
-    private func glyphImage(cell k: Int, tint: CGColor) -> (image: CGImage, dx: Int)? {
+    private func glyphImage(cell k: Int, tint: CGColor, hard: Bool = false) -> (image: CGImage, dx: Int)? {
         let (tr, tg, tb) = PlaylistFont.components(tint)
-        let key = GlyphKey(cell: k, tint: (UInt32(tr) << 16) | (UInt32(tg) << 8) | UInt32(tb))
+        let key = GlyphKey(cell: k, tint: (UInt32(tr) << 16) | (UInt32(tg) << 8) | UInt32(tb), hard: hard)
         lock.lock()
         if let hit = glyphCache[key] {
             lock.unlock()
@@ -245,7 +267,8 @@ public final class PlaylistFont {
         var pixels = [UInt8](repeating: 0, count: w * cellH * 4)
         for y in 0..<cellH {
             for x in 0..<w {
-                let cov = Int(coverage[(cy + y) * sheetWidth + cx + x0 + x])
+                var cov = Int(coverage[(cy + y) * sheetWidth + cx + x0 + x])
+                if hard { cov = cov >= PlaylistFont.hardInkThreshold ? 255 : 0 }
                 let i = (y * w + x) * 4
                 // Premultiplied: tint x coverage, alpha = coverage (rounded, not truncated).
                 pixels[i] = UInt8((tr * cov + 127) / 255)
@@ -296,5 +319,108 @@ public final class PlaylistFont {
             pen += advance(ch)
         }
         return pen
+    }
+
+    // MARK: - Hard ink (Token Flow labels)
+
+    /// Token Flow sets its labels over a live field, where a glyph's grey halo does not read as
+    /// phosphor glow but as blur - and on a sheet whose greys fill the whole cell, as a faint box
+    /// behind every letter. There the sheet is cut hard instead: coverage at or above this is full
+    /// ink, anything below is nothing. It is the same half-coverage cut SPEC 3.2 uses to decide
+    /// what an ink column is, so a hard label keeps exactly the strokes that set its advance and
+    /// its width is the width `measure` already reports. The Sessions list never takes this path.
+    public static let hardInkThreshold = 128
+
+    /// Where a string's hard ink lands, relative to the pen start and the cell top.
+    public struct InkBox: Equatable {
+        public var x: Int
+        public var y: Int
+        public var w: Int
+        public var h: Int
+    }
+
+    /// True when the sheet's code-127 cell really holds an ellipsis rather than nothing.
+    public var hasEllipsis: Bool { !extents[PlaylistFont.ellipsisCell].isBlank }
+
+    /// Hard-ink rows of the capitals and figures, relative to the cell top: the box a label is
+    /// placed by, so labels share one baseline whatever letters they happen to contain.
+    public var capRows: (top: Int, height: Int) {
+        var top = cellH, bottom = -1
+        for ch in "EHIMNTX0158" {
+            guard let k = cell(for: ch) else { continue }
+            let r = hardRows[k]
+            guard r.top <= r.bottom else { continue }
+            top = min(top, r.top)
+            bottom = max(bottom, r.bottom)
+        }
+        return bottom >= top ? (top, bottom - top + 1) : (0, cellH)
+    }
+
+    /// The hard ink of `text` (already sanitized) set from pen 0, or nil when nothing inks.
+    public func hardInkBox(_ text: String) -> InkBox? {
+        var pen = 0
+        var x0 = Int.max, x1 = Int.min, y0 = Int.max, y1 = Int.min
+        for ch in text {
+            if let k = cell(for: ch) {
+                let e = extents[k], r = hardRows[k]
+                if !e.isBlank, r.top <= r.bottom {
+                    // Proportional glyphs blit column L at the pen; monospace cells blit whole.
+                    let left = monospace ? pen + e.left : pen
+                    let right = monospace ? pen + e.right : pen + e.right - e.left
+                    x0 = min(x0, left); x1 = max(x1, right)
+                    y0 = min(y0, r.top); y1 = max(y1, r.bottom)
+                }
+            }
+            pen += advance(ch)
+        }
+        guard x1 >= x0, y1 >= y0 else { return nil }
+        return InkBox(x: x0, y: y0, w: x1 - x0 + 1, h: y1 - y0 + 1)
+    }
+
+    /// `draw`, cut hard at `hardInkThreshold`: the same glyphs at the same pen positions, as
+    /// solid ink with nothing in between.
+    @discardableResult
+    public func drawHardInk(_ text: String, on canvas: SkinCanvas, x: Int, y: Int, tint: CGColor) -> Int {
+        var pen = x
+        for ch in text {
+            if let k = cell(for: ch), let g = glyphImage(cell: k, tint: tint, hard: true) {
+                canvas.draw(g.image, in: CGRect(x: CGFloat(pen + g.dx), y: CGFloat(y),
+                                                width: CGFloat(g.image.width), height: CGFloat(g.image.height)))
+            }
+            pen += advance(ch)
+        }
+        return pen
+    }
+
+    /// Every hard-ink pixel of `text` (already sanitized) set from pen 0, relative to the pen and
+    /// the cell top: exactly the pixels `drawHardInk` lights, for writing straight into a bitmap.
+    public func forEachHardInkPixel(_ text: String, _ body: (Int, Int) -> Void) {
+        var pen = 0
+        for ch in text {
+            if let k = cell(for: ch) {
+                let e = extents[k], r = hardRows[k]
+                if !e.isBlank, r.top <= r.bottom {
+                    let cx = (k % PlaylistFont.columns) * cellW
+                    let cy = (k / PlaylistFont.columns) * cellH
+                    // A proportional glyph lands with its first ink column on the pen.
+                    let shift = monospace ? pen : pen - e.left
+                    for y in r.top...r.bottom {
+                        let row = (cy + y) * sheetWidth + cx
+                        for x in e.left...e.right where Int(coverage[row + x]) >= PlaylistFont.hardInkThreshold {
+                            body(shift + x, y)
+                        }
+                    }
+                }
+            }
+            pen += advance(ch)
+        }
+    }
+
+    /// Whether one pixel of a cell is hard ink (for the self-test).
+    func isHardInk(cell k: Int, x: Int, y: Int) -> Bool {
+        guard k >= 0, k < PlaylistFont.cellCount, x >= 0, x < cellW, y >= 0, y < cellH else { return false }
+        let cx = (k % PlaylistFont.columns) * cellW
+        let cy = (k / PlaylistFont.columns) * cellH
+        return Int(coverage[(cy + y) * sheetWidth + cx + x]) >= PlaylistFont.hardInkThreshold
     }
 }

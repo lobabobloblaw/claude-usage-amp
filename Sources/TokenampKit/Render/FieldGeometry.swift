@@ -7,11 +7,12 @@ import UsageModel
 /// the rule that no system font appears in a skinned window still holds (SPEC 3, amendment A1).
 public struct FieldLabel {
     public let text: String
-    /// Where the text goes. With `centred`, this is the middle of it rather than its left edge;
-    /// the geometry does not know the face's metrics, so the renderer does the centring.
+    /// Top-left of the label's ink box in field pixels: the left edge of its first stroke and the
+    /// top of its capitals (`FieldLabelMetrics`). With `centred`, `x` is the middle of it instead.
     public let x: Int
     public let y: Int
-    /// Dim labels (idle sessions) are drawn over a darker patch of field.
+    /// Dim labels (idle sessions, axis names) take the dim tint. Every label is set over a patch
+    /// of the field's background, so no trace runs through its letters.
     public let faint: Bool
     public let centred: Bool
 
@@ -24,21 +25,69 @@ public struct FieldLabel {
     }
 }
 
+/// What the geometry needs to know about the face its labels will be set in. The renderer owns
+/// the face (the skin's `plfont`, cut hard - see `FieldRenderer`), and the geometry needs its
+/// measurements to keep labels clear of each other and of the things they name.
+public struct FieldLabelMetrics {
+    /// Ink width of an already-sanitized string.
+    public let width: (String) -> Int
+    /// Height of the capitals' ink box. A label's `y` is the top of this box.
+    public let height: Int
+    /// The truncation mark, when the face has one.
+    public let ellipsis: String?
+
+    public init(width: @escaping (String) -> Int, height: Int, ellipsis: String?) {
+        self.width = width
+        self.height = max(1, height)
+        self.ellipsis = ellipsis
+    }
+
+    /// The classic 5x6 face, for callers that have no skin to hand.
+    public static let classic = FieldLabelMetrics(
+        width: { max(0, BitmapFont.width(of: $0) - 1) }, height: BitmapFont.glyphHeight,
+        ellipsis: "\u{2026}")
+
+    /// `text` cut to fit `maxWidth`: whole if it fits, else shortened with the ellipsis, else cut
+    /// bare. A cut never ends on a separator or a dangling period ("FABLE 5." reads as a typo), and
+    /// nil means not even a few letters fit.
+    public func fit(_ text: String, maxWidth: Int, minLetters: Int = 3) -> String? {
+        guard !text.isEmpty else { return nil }
+        if width(text) <= maxWidth { return text }
+        var chars = Array(text)
+        let mark = ellipsis ?? ""
+        while chars.count > minLetters {
+            chars.removeLast()
+            while let last = chars.last, " .-_/:,".contains(last) { chars.removeLast() }
+            guard chars.count >= minLetters else { break }
+            let candidate = String(chars) + mark
+            if width(candidate) <= maxWidth { return candidate }
+        }
+        return nil
+    }
+}
+
 /// Where the beam goes for each configuration (SPEC 2.9). Pure: the same inputs always deposit the
 /// same energy in the same places, which is what makes `--snapshot` reproducible.
 public enum FieldGeometry {
 
     public static func draw(_ mode: FieldMode, into f: PhosphorField, snapshot s: UsageSnapshot,
                             mods: FieldModulators, span: FieldSpan,
-                            flows: [String: Double], t: Double, now: Date) -> [FieldLabel] {
+                            flows: [String: Double], t: Double, now: Date,
+                            metrics: FieldLabelMetrics = .classic) -> [FieldLabel] {
         switch mode {
         case .scope: drawScope(f, s, mods, now); return []
-        case .strata: return drawStrata(f, s, mods, span, now)
-        case .web: return drawWeb(f, s, mods, flows, t, now)
+        case .strata: return drawStrata(f, s, mods, span, now, metrics)
+        case .web: return drawWeb(f, s, mods, flows, t, now, metrics)
         case .orbit: return drawOrbit(f, s, mods, t)
-        case .phase: return drawPhase(f, s, mods)
+        case .phase: return drawPhase(f, s, mods, metrics)
         }
     }
+
+    /// Whether a configuration's picture depends on the animation clock. Only WEB's does (its
+    /// pulses travel); every other configuration draws the same thing on every frame of one
+    /// instant, which lets `FieldRenderer.settle` take its run in one step. A configuration that
+    /// starts reading `t` must be added here.
+    public static func moves(_ mode: FieldMode) -> Bool { mode == .web }
 
     // MARK: - Graticule and wall
 
@@ -144,9 +193,11 @@ public enum FieldGeometry {
         // One trace per active session: three sessions interfere on the same axis, which is what
         // parallel work actually feels like.
         let steps = max(16, Int(w) * 3)
+        var trace: [CGPoint] = []
+        trace.reserveCapacity(steps + 1)
         for k in 0..<m.beams {
             let share = 1.0 / (1 + 0.55 * Double(m.beams - 1))
-            var prev: CGPoint?
+            trace.removeAll(keepingCapacity: true)
             for j in 0...steps {
                 let x = Double(j) / Double(steps) * (w - 1)
                 // Sample the signal where it *is* rather than where it is drawn, and carry the
@@ -157,23 +208,23 @@ public enum FieldGeometry {
                 let a = carrier >= 0
                     ? carrier * sample(out, u) * amp * share
                     : carrier * sample(into, u) * amp * share
-                let p = CGPoint(x: x, y: cy - a)
-                if let q = prev {
-                    f.segment(q.x, q.y, p.x, p.y, 1.6 * m.energy * (1 - 0.14 * Double(k)))
-                }
-                prev = p
+                trace.append(CGPoint(x: x, y: cy - a))
             }
+            f.polyline(trace, 1.6 * m.energy * (1 - 0.14 * Double(k)))
             for i in stride(from: k, to: n, by: 4) where fine[i].messages > 0 {
                 let peak = out[i] >= out[max(0, i - 1)] && out[i] >= out[min(n - 1, i + 1)]
                 guard peak else { continue }
                 let x = lastColumn * Double(i) / Double(n - 1) - roll
-                f.segment(x, cy - 3, x, cy + 3, 3.0 * m.energy)
+                // Hot enough to take a hotter hue than the trace it punches through: a line's
+                // colour comes from its own level, not from how much piles up under it.
+                f.segment(x, cy - 3, x, cy + 3, 9.0 * m.energy)
             }
         }
 
-        // The beam head at "now", with a short comet behind it.
-        for j in 0..<10 {
-            f.dot(w - 1 - Double(j) * 1.5, cy, (12 - Double(j) * 1.1) * m.energy)
+        // The beam head at "now", with a short comet behind it: one dot per pixel, so the tail
+        // is a solid streak that thins out rather than a dashed one.
+        for j in 0..<14 {
+            f.dot(w - 1 - Double(j), cy, (12 - Double(j) * 0.72) * m.energy)
         }
     }
 
@@ -182,7 +233,8 @@ public enum FieldGeometry {
     /// The ledger: one riser per bucket up to the fresh-token total, a tick where the output and
     /// input classes end, cache reads as a ghost behind on their own scale, and the pace line.
     static func drawStrata(_ f: PhosphorField, _ s: UsageSnapshot, _ m: FieldModulators,
-                           _ span: FieldSpan, _ now: Date) -> [FieldLabel] {
+                           _ span: FieldSpan, _ now: Date,
+                           _ metrics: FieldLabelMetrics = .classic) -> [FieldLabel] {
         let w = Double(f.width), h = Double(f.height)
         let lastColumn = w - 1
         let base = h - 10, top = 12.0
@@ -200,14 +252,10 @@ public enum FieldGeometry {
         }
         func y(_ v: Double) -> Double { base - FieldScale.normalise(v, quiet: loud / 300, loud: loud) * height }
 
-        func steps(_ pts: [CGPoint]) -> [CGPoint] {
-            var out: [CGPoint] = []
-            for (i, p) in pts.enumerated() {
-                if i > 0 { out.append(CGPoint(x: p.x, y: pts[i - 1].y)) }
-                out.append(p)
-            }
-            return out
-        }
+        // A ledger is a staircase, and a staircase is straight lines. Fed to a spline it would
+        // overshoot at every corner: a hook over each riser and a dip below the baseline wherever
+        // a bucket is empty.
+        let steps = FieldGeometry.staircase
 
         var ghost: [CGPoint] = []
         for (i, b) in buckets.enumerated() {
@@ -215,7 +263,7 @@ public enum FieldGeometry {
             let v = FieldScale.normalise(Double(b.tokens.cacheRead), quiet: loud / 8, loud: loud * 44)
             ghost.append(CGPoint(x: x, y: base - v * height))
         }
-        f.curve(steps(ghost), 2.0, .ghost, samples: 3)
+        f.polyline(steps(ghost), 2.0, .ghost)
         for (i, p) in ghost.enumerated() where i % 3 == 0 {
             f.segment(p.x, p.y, p.x, base, 0.35, .ghost)
         }
@@ -240,7 +288,7 @@ public enum FieldGeometry {
                 f.segment(x - tick * 0.7, y(inp), x + tick * 0.7, y(inp), 1.2 * m.energy)
             }
         }
-        f.curve(steps(outline), 1.1 * m.energy, .beam, samples: 3)
+        f.polyline(steps(outline), 1.1 * m.energy, .beam)
 
         // The pace line: what you could spend per bucket for the rest of the window and arrive
         // at the reset exactly at the limit. Columns standing above it are going faster than the
@@ -253,7 +301,22 @@ public enum FieldGeometry {
             f.segment(x, py, x + 2, py, 2.5 + 8 * max(0, m.pressure - 0.6))
             x += 5
         }
-        return [FieldLabel(text: "PACE", x: 2, y: max(0, Int(py) - 7), faint: true)]
+        // The name sits just above the line it names, or just below it when the line runs
+        // along the top of the well.
+        let above = Int(py.rounded()) - 2 - metrics.height
+        let y = above >= 1 ? above : Int(py.rounded()) + 3
+        return [FieldLabel(text: "PACE", x: 2, y: y, faint: true)]
+    }
+
+    /// Horizontal then vertical through each point: the outline of a bar per point.
+    static func staircase(_ pts: [CGPoint]) -> [CGPoint] {
+        var out: [CGPoint] = []
+        out.reserveCapacity(pts.count * 2)
+        for (i, p) in pts.enumerated() {
+            if i > 0 { out.append(CGPoint(x: p.x, y: pts[i - 1].y)) }
+            out.append(p)
+        }
+        return out
     }
 
     /// Fresh tokens per bucket that would spend exactly the rest of the binding limit over exactly
@@ -294,14 +357,16 @@ public enum FieldGeometry {
     /// The connectome: a hub, one node per model in play, one per session today, and an edge for
     /// every session to the model it is running on.
     static func drawWeb(_ f: PhosphorField, _ s: UsageSnapshot, _ m: FieldModulators,
-                        _ flows: [String: Double], _ t: Double, _ now: Date) -> [FieldLabel] {
+                        _ flows: [String: Double], _ t: Double, _ now: Date,
+                        _ metrics: FieldLabelMetrics = .classic) -> [FieldLabel] {
         let w = Double(f.width), h = Double(f.height)
-        let centre = CGPoint(x: w / 2, y: h / 2)
+        // Whole pixels: every ring is a pixel circle around its node, so the node itself sits on
+        // a pixel centre too.
+        let centre = CGPoint(x: (w / 2).rounded(.down), y: (h / 2).rounded(.down))
         // Nodes sit on an ellipse inset by enough room for the node itself and its label, so a
         // wide window spreads sideways instead of pushing names off the edge.
         let rx = max(12, w / 2 - 34)
         let ry = max(12, h / 2 - 18)
-        var labels: [FieldLabel] = []
 
         // A small well cannot carry a dozen names without the labels colliding, so it carries
         // fewer nodes, shorter names, and names only for the sessions that are actually live.
@@ -317,31 +382,37 @@ public enum FieldGeometry {
         var modelAt: [String: CGPoint] = [:]
         for (i, name) in models.enumerated() {
             let a = Double(i) / Double(max(1, models.count)) * 2 * .pi - .pi / 2
-            modelAt[name] = CGPoint(x: centre.x + cos(a) * rx * 0.34,
-                                    y: centre.y + sin(a) * ry * 0.34)
+            modelAt[name] = CGPoint(x: (centre.x + cos(a) * rx * 0.34).rounded(),
+                                    y: (centre.y + sin(a) * ry * 0.34).rounded())
         }
 
-        f.arc(centre: centre, radius: 4.5, from: 0, to: 2 * .pi, 26 * m.energy)
+        let hubRadius = 4.5, modelRadius = 2.5
+        f.arc(centre: centre, radius: hubRadius, from: 0, to: 2 * .pi, 26 * m.energy)
         f.arc(centre: centre, radius: 2, from: 0, to: 2 * .pi, 18 * m.energy)
         f.dot(centre.x, centre.y, 14 * m.energy)
 
-        for (name, p) in modelAt.sorted(by: { $0.key < $1.key }) {
+        for (_, p) in modelAt.sorted(by: { $0.key < $1.key }) {
             f.segment(centre.x, centre.y, p.x, p.y, 9 * m.energy, .ghost)
-            f.arc(centre: p, radius: 2.5, from: 0, to: 2 * .pi, 11 * m.energy)
-            guard !dense else { continue }
-            let short = String(BitmapFont.sanitize(name).prefix(8))
-            labels.append(FieldLabel(text: short, x: Int(p.x), y: Int(p.y) + 5,
-                                     faint: true, centred: true))
+            f.arc(centre: p, radius: modelRadius, from: 0, to: 2 * .pi, 11 * m.energy)
         }
 
+        // Every node. They hold still: in a field of whole pixels a node that wobbled would
+        // leave its ring and every edge doubled up by its own tail, and the pulses already say
+        // which sessions are live.
+        struct Node {
+            let at: CGPoint
+            let radius: Double
+            let row: SessionRow
+            let recency: Double
+        }
+        var nodes: [Node] = []
         for (i, row) in sessions.enumerated() {
             guard let anchor = modelAt[row.model] else { continue }
             let a = Double(i) / Double(sessions.count) * 2 * .pi + 0.6
             // Live sessions are held in close to the hub; idle ones drift out towards the rim.
             let pull = row.isActive ? 0.72 : 0.97
-            let breathe = 1 + 0.04 * sin(t * 0.7 + Double(i))
-            let p = CGPoint(x: centre.x + cos(a) * rx * pull * breathe,
-                            y: centre.y + sin(a) * ry * pull * breathe)
+            let p = CGPoint(x: (centre.x + cos(a) * rx * pull).rounded(),
+                            y: (centre.y + sin(a) * ry * pull).rounded())
 
             let idle = now.timeIntervalSince(row.lastActivity)
             let recency = row.isActive ? 1.0 : max(0.12, 1 - idle / 3_600)
@@ -362,16 +433,57 @@ public enum FieldGeometry {
                 f.arc(centre: p, radius: r + 2 + pulse * 9, from: 0, to: 2 * .pi,
                       (1 - pulse) * 9 * m.energy, .ghost)
             }
+            nodes.append(Node(at: p, radius: r.rounded(), row: row, recency: recency))
+        }
 
-            guard !dense || row.isActive else { continue }
-            let name = String(BitmapFont.sanitize(shortProject(row.project)).prefix(dense ? 10 : 14))
-            let below = p.y < h - 18
-            let ly = Int(p.y + (below ? r + 3 : -r - 11))
-            labels.append(FieldLabel(text: name, x: Int(p.x),
-                                     y: max(1, min(f.height - 9, ly)),
-                                     faint: !row.isActive, centred: true))
+        // Names. Live sessions first, then the models, then idle sessions from the most recent:
+        // when there is not room for everything, the ones that matter least are the ones that go.
+        var placer = LabelPlacer(width: f.width, height: f.height, metrics: metrics)
+        placer.avoid(centre, radius: hubRadius.rounded())
+        for p in modelAt.values { placer.avoid(p, radius: modelRadius.rounded()) }
+        for n in nodes { placer.avoid(n.at, radius: n.radius) }
+
+        var labels: [FieldLabel] = []
+        let sessionWidth = dense ? max(36, Int(w * 0.3)) : max(40, min(110, Int(w * 0.4)))
+        func labelSession(_ n: Node) {
+            let name = BitmapFont.sanitize(shortProject(n.row.project))
+            let texts = [metrics.fit(name, maxWidth: sessionWidth),
+                         metrics.fit(name, maxWidth: sessionWidth * 3 / 5)].compactMap { $0 }
+            if let placed = placer.place(texts, near: n.at, radius: n.radius, from: centre,
+                                         faint: !n.row.isActive) {
+                labels.append(placed)
+            }
+        }
+        for n in nodes where n.row.isActive { labelSession(n) }
+        if !dense {
+            for (name, p) in modelAt.sorted(by: { $0.key < $1.key }) {
+                if let placed = placer.place(FieldGeometry.modelNames(name, metrics: metrics),
+                                             near: p, radius: modelRadius.rounded(), from: centre,
+                                             faint: true) {
+                    labels.append(placed)
+                }
+            }
+            let idle = nodes.filter { !$0.row.isActive }.sorted { $0.recency > $1.recency }
+            for n in idle { labelSession(n) }
         }
         return labels
+    }
+
+    /// The ways a model can be named, longest first: whole ("FABLE 5.1") while it fits, then the
+    /// family alone ("FABLE") - never a version cut short, which would end on a dangling period.
+    static func modelNames(_ model: String, metrics: FieldLabelMetrics, maxWidth: Int = 64) -> [String] {
+        let whole = BitmapFont.sanitize(model).trimmingCharacters(in: .whitespaces)
+        var out: [String] = []
+        if !whole.isEmpty, metrics.width(whole) <= maxWidth { out.append(whole) }
+        if let space = whole.firstIndex(of: " ") {
+            let family = String(whole[..<space])
+            if let fitted = metrics.fit(family, maxWidth: maxWidth), !out.contains(fitted) {
+                out.append(fitted)
+            }
+        } else if out.isEmpty, let fitted = metrics.fit(whole, maxWidth: maxWidth) {
+            out.append(fitted)
+        }
+        return out
     }
 
     /// `fable5dot1/claude-usage-amp` -> `CLAUDE-USAGE-AMP`: the leaf is what identifies the work.
@@ -395,10 +507,11 @@ public enum FieldGeometry {
         let sessionPct = (s.limit(.session)?.percent ?? m.pressure * 100) / 100
         let weekPct = (s.limit(.weeklyAll)?.percent ?? 0) / 100
 
-        f.arc(centre: centre, radius: rWeek, from: 0, to: 2 * .pi, 10, .ghost)
-        f.arc(centre: centre, radius: rSession, from: 0, to: 2 * .pi, 12, .ghost)
+        // The rings are the limits, so they carry the weight of a wall even one pixel thick.
+        f.arc(centre: centre, radius: rWeek, from: 0, to: 2 * .pi, 15, .ghost)
+        f.arc(centre: centre, radius: rSession, from: 0, to: 2 * .pi, 18, .ghost)
 
-        let hot = 3.5 + 9 * max(0, m.pressure - 0.6)
+        let hot = 4.5 + 11 * max(0, m.pressure - 0.6)
         if weekPct > 0 {
             f.arc(centre: centre, radius: rWeek, from: start,
                   to: start + 2 * .pi * min(1, weekPct), hot * 1.4)
@@ -473,7 +586,8 @@ public enum FieldGeometry {
     /// its own recent past always has something to say: steady work sits on the diagonal, and
     /// every burst-and-recover cycle throws a loop off it, so the shape is the rhythm of the work
     /// rather than a property of the token mix.
-    static func drawPhase(_ f: PhosphorField, _ s: UsageSnapshot, _ m: FieldModulators) -> [FieldLabel] {
+    static func drawPhase(_ f: PhosphorField, _ s: UsageSnapshot, _ m: FieldModulators,
+                          _ metrics: FieldLabelMetrics = .classic) -> [FieldLabel] {
         let w = Double(f.width), h = Double(f.height)
         // Three fine buckets: 15 seconds, about one turn of an agentic loop.
         let lag = 3
@@ -497,6 +611,110 @@ public enum FieldGeometry {
         }
         if let last = pts.last { f.dot(last.x, last.y, 22 * m.energy) }
         return [FieldLabel(text: "T-15S", x: 2, y: 2, faint: true),
-                FieldLabel(text: "NOW", x: f.width - 20, y: f.height - 9, faint: true)]
+                FieldLabel(text: "NOW", x: f.width - metrics.width("NOW") - 2,
+                           y: f.height - metrics.height - 2, faint: true)]
+    }
+}
+
+/// Lays labels out next to the nodes they name without letting any two collide, or a label
+/// cover a node (SPEC 2.9, WEB).
+///
+/// Each label tries its texts longest first, and each text tries four sides of its node, starting
+/// with the one facing away from the hub: that is where the edges are not. A label that fits
+/// nowhere is left out rather than printed over something else.
+struct LabelPlacer {
+    struct Box: Equatable {
+        var x: Int, y: Int, w: Int, h: Int
+        func intersects(_ o: Box) -> Bool {
+            x < o.x + o.w && o.x < x + w && y < o.y + o.h && o.y < y + h
+        }
+        func touches(circle c: CGPoint, radius r: Double) -> Bool {
+            let nx = min(max(c.x, Double(x)), Double(x + w - 1))
+            let ny = min(max(c.y, Double(y)), Double(y + h - 1))
+            let dx = c.x - nx, dy = c.y - ny
+            return dx * dx + dy * dy <= r * r
+        }
+    }
+
+    enum Side: CaseIterable { case below, above, right, left }
+
+    let width: Int
+    let height: Int
+    let metrics: FieldLabelMetrics
+    /// The knock-out patch of every label placed so far (ink box plus one pixel all round).
+    private(set) var placed: [Box] = []
+    private(set) var obstacles: [(centre: CGPoint, radius: Double)] = []
+
+    init(width: Int, height: Int, metrics: FieldLabelMetrics) {
+        self.width = width
+        self.height = height
+        self.metrics = metrics
+    }
+
+    mutating func avoid(_ centre: CGPoint, radius: Double) {
+        obstacles.append((centre, radius))
+    }
+
+    /// The sides to try, nearest the direction away from `hub` first.
+    static func sides(for p: CGPoint, from hub: CGPoint) -> [Side] {
+        let dx = p.x - hub.x, dy = p.y - hub.y
+        let vertical: Side = dy < 0 ? .above : .below
+        let horizontal: Side = dx < 0 ? .left : .right
+        func opposite(_ s: Side) -> Side {
+            switch s { case .below: return .above; case .above: return .below
+                       case .left: return .right; case .right: return .left }
+        }
+        // Names read best centred under or over their node, so the vertical sides go first
+        // unless the node sits well out to the side of the hub.
+        if abs(dx) > abs(dy) * 2.5 {
+            return [horizontal, vertical, opposite(vertical), opposite(horizontal)]
+        }
+        return [vertical, horizontal, opposite(horizontal), opposite(vertical)]
+    }
+
+    /// Where a text of this ink size would go on one side of a node, kept inside the field.
+    func box(side: Side, textWidth tw: Int, near p: CGPoint, radius r: Double) -> Box {
+        let th = metrics.height
+        let gap = 2.0
+        var x: Int, y: Int
+        switch side {
+        case .below:
+            x = Int((p.x - Double(tw) / 2).rounded()); y = Int((p.y + r + gap + 1).rounded())
+        case .above:
+            x = Int((p.x - Double(tw) / 2).rounded()); y = Int((p.y - r - gap - 1).rounded()) - th
+        case .right:
+            x = Int((p.x + r + gap + 2).rounded()); y = Int((p.y - Double(th) / 2).rounded())
+        case .left:
+            x = Int((p.x - r - gap - 2).rounded()) - tw; y = Int((p.y - Double(th) / 2).rounded())
+        }
+        x = min(max(1, x), max(1, width - tw - 1))
+        y = min(max(1, y), max(1, height - th - 1))
+        return Box(x: x, y: y, w: tw, h: th)
+    }
+
+    /// Whether an ink box can go here: its patch clear of every placed patch and every node.
+    func fits(_ ink: Box) -> Bool {
+        let patch = Box(x: ink.x - 1, y: ink.y - 1, w: ink.w + 2, h: ink.h + 2)
+        guard patch.x >= 0, patch.y >= 0, patch.x + patch.w <= width, patch.y + patch.h <= height
+        else { return false }
+        if placed.contains(where: { $0.intersects(patch) }) { return false }
+        return !obstacles.contains { patch.touches(circle: $0.centre, radius: $0.radius + 1) }
+    }
+
+    /// Place the first text that fits on any side of the node, or nothing.
+    mutating func place(_ texts: [String], near p: CGPoint, radius r: Double, from hub: CGPoint,
+                        faint: Bool) -> FieldLabel? {
+        let order = LabelPlacer.sides(for: p, from: hub)
+        for text in texts {
+            let tw = metrics.width(text)
+            guard tw > 0, tw + 2 <= width else { continue }
+            for side in order {
+                let ink = box(side: side, textWidth: tw, near: p, radius: r)
+                guard fits(ink) else { continue }
+                placed.append(Box(x: ink.x - 1, y: ink.y - 1, w: ink.w + 2, h: ink.h + 2))
+                return FieldLabel(text: text, x: ink.x, y: ink.y, faint: faint)
+            }
+        }
+        return nil
     }
 }
