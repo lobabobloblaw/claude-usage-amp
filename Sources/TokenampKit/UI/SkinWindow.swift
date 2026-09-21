@@ -12,7 +12,14 @@ public final class SkinWindow: NSWindow {
     public override var canBecomeKey: Bool { true }
     public override var canBecomeMain: Bool { true }
 
+    /// The window's size in skin pixels and the points-scale it is shown at, as last set through
+    /// `init` or `setSkinSize` - which is every size change the app makes.
+    public private(set) var skinSize: SkinPair
+    public private(set) var pointsScale: Double
+
     public init(skinSize: SkinPair, scale: Double, title: String) {
+        self.skinSize = skinSize
+        pointsScale = scale
         let size = ScaleModel.contentSize(skin: skinSize, points: scale)
         super.init(contentRect: NSRect(origin: .zero, size: size), styleMask: [.borderless],
                    backing: .buffered, defer: false)
@@ -30,8 +37,16 @@ public final class SkinWindow: NSWindow {
     /// Resize around the top-left corner, which is how a Winamp window grows downwards. Because
     /// every resize keeps it, the top-left corner is also what gets persisted (`WindowLayout`).
     public func setSkinSize(_ size: SkinPair, scale: Double) {
+        skinSize = size
+        pointsScale = scale
         let newSize = ScaleModel.contentSize(skin: size, points: scale)
         setFrame(WindowLayout.resized(frame, to: newSize), display: true)
+    }
+
+    /// What the art really covers - `skinSize x scale` exactly, from the top-left - which is what
+    /// docking snaps and stacks on (SPEC 2.8), not the `ceil()`ed frame.
+    public var skinFrame: CGRect {
+        WindowLayout.skinRect(frame: frame, skinSize: skinSize, scale: pointsScale)
     }
 
     public var topLeft: CGPoint {

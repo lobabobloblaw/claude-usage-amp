@@ -172,12 +172,14 @@ public enum PlaylistRenderer {
         ]
     }
 
-    /// Which row index a click at `point` (skin pixels) lands on, or nil.
+    /// Which row index a click at `point` (skin pixels) lands on, or nil. Only drawn rows count:
+    /// the partial strip under the last whole row is list background, not a row.
     public static func rowIndex(at point: CGPoint, width w: Int, height h: Int, scroll: Int, count: Int,
                                 rowHeight: Int = Layout.Playlist.rowHeight) -> Int? {
         let area = listRect(width: w, height: h)
         guard area.contains(point) else { return nil }
         let slot = Int(point.y - CGFloat(area.y)) / max(1, rowHeight)
+        guard slot < visibleRows(height: h, rowHeight: rowHeight) else { return nil }
         let index = scroll + slot
         return index < count ? index : nil
     }

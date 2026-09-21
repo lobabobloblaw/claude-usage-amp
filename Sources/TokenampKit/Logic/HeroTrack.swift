@@ -23,8 +23,19 @@ public enum HeroTrack {
         return resolveIndex(index, count: count) + 1
     }
 
-    public static func next(_ index: Int, count: Int) -> Int { resolveIndex(index + 1, count: count) }
-    public static func previous(_ index: Int, count: Int) -> Int { resolveIndex(index - 1, count: count) }
+    /// Step the hero track by `delta` (the transport's prev/next, Shuffle), wrapping.
+    ///
+    /// With no tracks at all - the live source has not answered yet, or its token expired - there
+    /// is nothing to step through, so the stored choice comes back untouched rather than collapsed
+    /// onto track 1. It is resolved against the tracklist only where it is used (`hero`), so the
+    /// hero the user picked is still the hero when the limits come back.
+    public static func step(_ index: Int, by delta: Int, count: Int) -> Int {
+        guard count > 0 else { return index }
+        return resolveIndex(index + delta, count: count)
+    }
+
+    public static func next(_ index: Int, count: Int) -> Int { step(index, by: 1, count: count) }
+    public static func previous(_ index: Int, count: Int) -> Int { step(index, by: -1, count: count) }
 
     /// Session limit utilisation for the volume gauge; 0 when unknown (SPEC 2.1).
     public static func sessionPercent(_ snapshot: UsageSnapshot) -> Double? {

@@ -83,6 +83,7 @@ public final class Preferences {
         static let menuBarReadout = "menuBarReadout"
         static let heroIndex = "heroIndex"
         static let timeRemaining = "timeRemaining"
+        static let announcedAlerts = "announcedAlerts"
     }
 
     // MARK: - Skin
@@ -318,5 +319,13 @@ public final class Preferences {
     public var timeRemaining: Bool {
         get { defaults.bool(forKey: K.timeRemaining) }
         set { defaults.set(newValue, forKey: K.timeRemaining) }
+    }
+
+    /// The limit alerts already announced (`AlertLedger.encoded`), so a relaunch does not announce
+    /// them again. Deliberately not registered: nil means nothing was ever stored, and the first
+    /// snapshot with limits is then recorded silently rather than announced (`ThresholdNotifier`).
+    public var announcedAlerts: [String]? {
+        get { defaults.stringArray(forKey: K.announcedAlerts) }
+        set { defaults.set(newValue, forKey: K.announcedAlerts) }
     }
 }

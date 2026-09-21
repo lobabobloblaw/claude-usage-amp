@@ -137,7 +137,7 @@ public final class MainWindowController: NSObject, SkinViewDelegate, NSWindowDel
         guard inside else { return }
         switch id {
         case .optionsButton:
-            app.showOptionsMenu(at: NSPoint(x: 0, y: view.bounds.height), in: view)
+            showOptionsMenuUnderButton()
         case .minimizeButton:
             window.miniaturize(nil)
         case .shadeButton:
@@ -145,9 +145,9 @@ public final class MainWindowController: NSObject, SkinViewDelegate, NSWindowDel
         case .closeButton:
             app.quit()
         case .previous:
-            app.selectHero(HeroTrack.previous(app.heroIndex, count: max(1, app.snapshot.limits.count)))
+            app.stepHero(by: -1)
         case .next:
-            app.selectHero(HeroTrack.next(app.heroIndex, count: max(1, app.snapshot.limits.count)))
+            app.stepHero(by: 1)
         case .play:
             app.resumeAndRefresh()
         case .pause:
@@ -171,7 +171,7 @@ public final class MainWindowController: NSObject, SkinViewDelegate, NSWindowDel
         case .aboutLogo:
             app.showAbout()
         case ControlID.clutter("O"):
-            app.showOptionsMenu(at: NSPoint(x: view.viewPoint(point).x, y: view.bounds.height), in: view)
+            app.showOptionsMenu(at: view.menuPoint(point), in: view)
         case ControlID.clutter("A"):
             app.toggleAlwaysOnTop()
         case ControlID.clutter("I"):
@@ -188,6 +188,13 @@ public final class MainWindowController: NSObject, SkinViewDelegate, NSWindowDel
 
     public func skinView(_ view: SkinView, hoverChanged id: ControlID?) {
         app.setHover(id)
+    }
+
+    /// The options menu drops from under the title bar's options button, as Winamp's does. (The
+    /// view is flipped, so `bounds.height` - used here before - was the *bottom* of the window.)
+    func showOptionsMenuUnderButton() {
+        let button = isShade ? Layout.Shade.optionsButton : Layout.Main.optionsButton
+        app.showOptionsMenu(at: view.menuPoint(CGPoint(x: button.x, y: button.y + button.h)), in: view)
     }
 
     public func skinView(_ view: SkinView, rightClickAt point: CGPoint) {

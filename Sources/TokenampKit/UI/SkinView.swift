@@ -103,9 +103,13 @@ public class SkinView: NSView {
         NSPoint(x: skin.x * CGFloat(scale), y: skin.y * CGFloat(scale))
     }
 
-    /// Menus are positioned in the view's own (unflipped, AppKit) space.
+    /// Where `NSMenu.popUp(positioning:at:in:)` should open for a skin-pixel point: the menu's
+    /// top-left lands there. `popUp` reads the point in the view's *own* coordinate system, and this
+    /// view is flipped, so that is y-down - the same space as `viewPoint`. Flipping it again opened
+    /// every context menu mirrored top-to-bottom (a click near the top of Sessions put the menu
+    /// near its bottom).
     public func menuPoint(_ skin: CGPoint) -> NSPoint {
-        NSPoint(x: skin.x * CGFloat(scale), y: bounds.height - skin.y * CGFloat(scale))
+        viewPoint(skin)
     }
 
     public func region(at point: CGPoint) -> HitRegion? {

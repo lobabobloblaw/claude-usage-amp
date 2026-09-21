@@ -56,21 +56,35 @@ public enum SkinCatalog {
         return Skin.base
     }
 
-    /// Copy a dropped `.wsz`/`.zip`/folder into the user skins folder so it survives relaunches.
-    /// Returns the installed URL (or the original when the copy failed).
-    @discardableResult
-    public static func install(_ url: URL) -> URL {
-        let dir = ResourceLocator.ensureUserSkinsDirectory()
+    /// Load a dropped `.wsz`/`.zip`/folder and copy it into the user skins folder so it survives
+    /// relaunches (SPEC 2.6).
+    ///
+    /// The skin is loaded **before** anything is copied, so one that does not load is never
+    /// installed (the error is thrown and the folder is untouched). The copy goes to a hidden
+    /// staging name first and replaces a same-named skin only once it is complete; whatever goes
+    /// wrong on the way, the staging copy is removed and the original URL is returned, which still
+    /// loads.
+    ///
+    /// - Returns: the loaded skin and the URL to remember for it: the installed copy, or the
+    ///   original when it could not be copied.
+    public static func install(_ url: URL,
+                               into dir: URL = ResourceLocator.ensureUserSkinsDirectory()) throws -> (skin: Skin, url: URL) {
+        let skin = try SkinLoader.load(url: url)
+        let fm = FileManager.default
         let dest = dir.appendingPathComponent(url.lastPathComponent)
-        if dest.standardizedFileURL == url.standardizedFileURL { return url }
+        if dest.standardizedFileURL == url.standardizedFileURL { return (skin, url) }
+        let staging = dir.appendingPathComponent(".installing-\(UUID().uuidString)-\(url.lastPathComponent)")
+        defer { try? fm.removeItem(at: staging) }
         do {
-            if FileManager.default.fileExists(atPath: dest.path) {
-                try FileManager.default.removeItem(at: dest)
+            try fm.copyItem(at: url, to: staging)
+            if fm.fileExists(atPath: dest.path) {
+                _ = try fm.replaceItemAt(dest, withItemAt: staging)
+            } else {
+                try fm.moveItem(at: staging, to: dest)
             }
-            try FileManager.default.copyItem(at: url, to: dest)
-            return dest
+            return (skin, dest)
         } catch {
-            return url
+            return (skin, url)
         }
     }
 

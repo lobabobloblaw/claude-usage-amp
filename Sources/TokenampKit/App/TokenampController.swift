@@ -20,7 +20,12 @@ public final class TokenampController: NSObject {
     public private(set) var playlist: PlaylistWindowController!
     public private(set) var field: FieldWindowController!
     private var statusItem: StatusItemController?
-    private let notifier = ThresholdNotifier()
+    /// Limit alerts (Repeat). The account's ledger is persisted so a relaunch does not announce
+    /// again what it already did; synthetic demo data gets one of its own in memory, so a demo run
+    /// never writes made-up limit windows into the real ledger.
+    private let accountNotifier: ThresholdNotifier
+    private let demoNotifier = ThresholdNotifier()
+    private var notifier: ThresholdNotifier { isUsingDemoData ? demoNotifier : accountNotifier }
 
     /// Rebuilt whenever the user picks a different provider mode.
     private let providerFactory: (Bool) -> UsageProvider
@@ -90,6 +95,7 @@ public final class TokenampController: NSObject {
         self.providerFactory = providerFactory
         self.liveProviderAvailable = liveProviderAvailable
         self.prefs = prefs
+        accountNotifier = ThresholdNotifier(prefs: prefs)
         demoOverride = forceDemo
         let p = providerFactory(forceDemo || prefs.demoData)
         provider = p
@@ -99,9 +105,13 @@ public final class TokenampController: NSObject {
         skinLoadError = loaded.error
         heroIndex = prefs.heroIndex
         visualizerMode = prefs.visualizerMode
+        // A `--skin` that loaded is remembered, but only once it has drawn (`start`).
+        skinPathToRemember = loaded.error == nil ? skinOverride : nil
         super.init()
-        if let skinOverride { prefs.skinPath = skinOverride }
     }
+
+    /// A `--skin` override waiting for the first draw before it becomes the stored skin.
+    private var skinPathToRemember: String?
 
     // MARK: - Lifecycle
 
@@ -118,6 +128,10 @@ public final class TokenampController: NSObject {
         docking.playlist = playlist.window
         docking.field = field.window
         docking.scale = scale
+        docking.onDragEnd = { [weak self] in
+            guard let self, self.scaleReconcilePending else { return }
+            self.reconcileScaleWithCurrentScreen()
+        }
 
         // Also applies the stored shade state, before anything is shown.
         restoreWindowPositions()
@@ -130,6 +144,11 @@ public final class TokenampController: NSObject {
         if prefs.eqOpen { equalizer.show() }
         if prefs.playlistOpen { playlist.show() }
         if prefs.fieldOpen { field.show() }
+        if let path = skinPathToRemember {
+            drawVisibleWindowsNow()
+            prefs.skinPath = path
+            skinPathToRemember = nil
+        }
         if prefs.menuBarReadout { setMenuBarReadout(true) }
 
         provider.onChange = { [weak self] snap in self?.ingest(snap) }
@@ -164,7 +183,10 @@ public final class TokenampController: NSObject {
         }
         snapshot = snap
         sessionFlow.ingest(snap, now: Date())
-        heroIndex = HeroTrack.resolveIndex(heroIndex, count: max(1, snap.limits.count))
+        // The hero index is deliberately NOT resolved against this snapshot. The live provider's
+        // first publish (and every one while the token is expired) has no limits at all, and
+        // clamping to that empty tracklist collapsed the user's pick onto track 1 for good.
+        // `HeroTrack.hero` wraps the stored index wherever it is used.
         rebuildMarquee()
         if prefs.repeatAlerts { notifier.check(snapshot: snap) }
         statusItem?.update(snapshot: snap, now: Date())
@@ -177,7 +199,12 @@ public final class TokenampController: NSObject {
             equalizer.view.needsDisplay = true
         }
         field?.refreshReadout()
-        let plSig = "\(snap.sessionsToday.count)|\(snap.sessionsToday.map { $0.costUSD })|\(snap.today.costUSD)"
+        playlist?.dataChanged()
+        // Row identity and the active flag are in it: the list re-sorts by activity, and the
+        // selection highlight follows its session (and the Current colour its state) only if a
+        // re-sort alone redraws.
+        let plSig = snap.sessionsToday.map { "\($0.id):\($0.isActive):\($0.costUSD):\($0.tokens.total)" }
+            .joined(separator: "|") + "|\(snap.today.costUSD)"
         if plSig != lastPlaylistSignature {
             lastPlaylistSignature = plSig
             playlist.view.needsDisplay = true
@@ -220,7 +247,8 @@ public final class TokenampController: NSObject {
         // Hero auto-cycle (Shuffle).
         if prefs.shuffle, playState == .playing, now.timeIntervalSince(lastShuffleAt) >= 8 {
             lastShuffleAt = now
-            selectHero(HeroTrack.next(heroIndex, count: max(1, snapshot.limits.count)))
+            // No tracks, nothing to shuffle through - and nothing to overwrite the stored pick with.
+            if !snapshot.limits.isEmpty { stepHero(by: 1) }
         }
         // EQ auto range rotation.
         if prefs.eqAuto, now.timeIntervalSince(lastEQRotateAt) >= 10 {
@@ -336,8 +364,15 @@ public final class TokenampController: NSObject {
 
     // MARK: - Actions
 
+    /// The transport's prev/next (and Shuffle). With no limits there is no track to step to, and
+    /// the stored pick is left alone (`HeroTrack.step`).
+    public func stepHero(by delta: Int) {
+        guard !snapshot.limits.isEmpty else { return }
+        selectHero(HeroTrack.step(heroIndex, by: delta, count: snapshot.limits.count))
+    }
+
     public func selectHero(_ index: Int) {
-        heroIndex = HeroTrack.resolveIndex(index, count: max(1, snapshot.limits.count))
+        heroIndex = snapshot.limits.isEmpty ? index : HeroTrack.resolveIndex(index, count: snapshot.limits.count)
         prefs.heroIndex = heroIndex
         rebuildMarquee()
         marqueeOffset = 0
@@ -395,7 +430,10 @@ public final class TokenampController: NSObject {
     public func toggleRepeatAlerts() {
         prefs.repeatAlerts.toggle()
         if prefs.repeatAlerts {
+            // Enabling the toggle must not announce limits that are already high - in whichever
+            // data source is not showing right now either, the next time it does.
             notifier.prime(snapshot: snapshot)
+            (notifier === accountNotifier ? demoNotifier : accountNotifier).primeOnNextSnapshot()
             notifier.requestAuthorizationIfPossible()
         }
         mainWindow.view.needsDisplay = true
@@ -490,22 +528,34 @@ public final class TokenampController: NSObject {
         startScale(on: startupScreen())
     }
 
+    /// The scale a screen gets: the stored preference, or with none stored the default derived
+    /// from *that* screen - never from the scale in use (`ScaleModel.resolved`).
     private func startScale(on screen: NSScreen?) -> Double {
         let backing = screen?.backingScaleFactor ?? 1
         let visible = screen?.visibleFrame ?? CGRect(x: 0, y: 0, width: 1440, height: 900)
-        let wanted = prefs.hasStoredScale
-            ? prefs.pointsScale
-            : ScaleModel.defaultPointScale(visibleFrame: visible, backing: backing)
-        return ScaleModel.nearest(wanted, backing: backing)
+        return ScaleModel.resolved(stored: prefs.hasStoredScale ? prefs.pointsScale : nil,
+                                   visibleFrame: visible, backing: backing)
     }
+
+    /// The main window changed screens in the middle of a window drag; the rescale waits for the
+    /// drag to end (`reconcileScaleWithCurrentScreen`).
+    private var scaleReconcilePending = false
 
     /// SPEC 2.8: when the main window is on a screen whose backing factor makes the stored scale
     /// invalid (1.5x on a 1x display), use the nearest valid scale *there* without overwriting the
     /// preference.
+    ///
+    /// Not in the middle of a drag: resizing then would leave the dragged window's grip and the
+    /// followers' docking offsets at the old scale, so the stack jumped against the pointer and a
+    /// follower overlapped the main window by the height difference. The drag's end runs it.
     public func reconcileScaleWithCurrentScreen() {
-        guard mainWindow != nil else { return }
-        let wanted = prefs.hasStoredScale ? prefs.pointsScale : scale
-        let resolved = ScaleModel.nearest(wanted, backing: backingFactor)
+        guard let mainWindow else { return }
+        if docking.isDragging {
+            scaleReconcilePending = true
+            return
+        }
+        scaleReconcilePending = false
+        let resolved = startScale(on: mainWindow.window.screen ?? NSScreen.main)
         guard abs(resolved - scale) > 1e-9 else { return }
         applyScale(resolved)
     }
@@ -641,18 +691,31 @@ public final class TokenampController: NSObject {
 
     // MARK: - Skins
 
+    /// Load a skin the user picked or dropped. It is validated before anything else happens (an
+    /// install copies only a skin that loads), and it is remembered for the next launch only once
+    /// it has drawn: a skin that brought the app down while drawing must not come back on every
+    /// launch after it.
     public func loadSkin(at url: URL, install: Bool) {
-        let target = install ? SkinCatalog.install(url) : url
+        let loaded: (skin: Skin, url: URL)
         do {
-            let loaded = try SkinLoader.load(url: target)
-            skin = loaded
-            skinLoadError = nil
-            prefs.skinPath = target.path
-            applySkinEverywhere()
+            loaded = install ? try SkinCatalog.install(url) : (try SkinLoader.load(url: url), url)
         } catch {
-            skinLoadError = "\(target.lastPathComponent): \(error)"
+            skinLoadError = "\(url.lastPathComponent): \(error)"
             NSSound.beep()
+            return
         }
+        skin = loaded.skin
+        skinLoadError = nil
+        applySkinEverywhere()
+        drawVisibleWindowsNow()
+        prefs.skinPath = loaded.url.path
+    }
+
+    /// Draw every open window right now rather than on the next display cycle, so a skin is known
+    /// to render before it is remembered.
+    private func drawVisibleWindowsNow() {
+        let windows: [SkinWindow?] = [mainWindow?.window, equalizer?.window, playlist?.window, field?.window]
+        for case let window? in windows where window.isVisible { window.displayIfNeeded() }
     }
 
     public func reloadSkin() {

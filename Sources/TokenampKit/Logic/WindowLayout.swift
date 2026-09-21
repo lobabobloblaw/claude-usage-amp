@@ -36,6 +36,45 @@ public enum WindowLayout {
         ScaleModel.contentSize(skin: SkinPair(1, skinHeight), points: scale).height
     }
 
+    // MARK: - The art's own rectangle (SPEC 2.8)
+
+    /// The rectangle a window's art really covers: `skinSize x scale` exactly, hung from the
+    /// window's top-left corner. The window itself is `ceil()`ed (412.5 pt of art in a 413 pt
+    /// window), and the spare fraction is a transparent sliver along the right and bottom edges, so
+    /// docking against the window frame left a one-device-pixel seam. Every docking decision is
+    /// made on this rectangle instead.
+    public static func skinRect(frame: CGRect, skinSize: SkinPair, scale: Double) -> CGRect {
+        let size = ScaleModel.exactSize(skin: skinSize, points: scale)
+        return CGRect(x: frame.minX, y: frame.maxY - size.height, width: size.width, height: size.height)
+    }
+
+    /// The window origin (bottom-left, what AppKit takes) that puts the art rectangle's origin at
+    /// `skinOrigin`: the two share their top-left corner.
+    public static func frameOrigin(skinOrigin: CGPoint, skinHeight: CGFloat, frameHeight: CGFloat) -> CGPoint {
+        CGPoint(x: skinOrigin.x, y: skinOrigin.y + skinHeight - frameHeight)
+    }
+
+    /// The whole-point window origin for an art rectangle that wants to be at `art`.
+    ///
+    /// AppKit keeps window frames on whole points - a half-point origin is floored, even on a 2x
+    /// display - so an art edge on a half point (261 px of Sessions is 391.5 pt of art at 1.5x)
+    /// cannot be met exactly by the window docked to it. Each axis is therefore rounded *towards*
+    /// the neighbour the art is docked to: a window hanging under another is rounded up into it, one
+    /// to the left of another is rounded right into it. The two arts then overlap by half a point
+    /// (one device pixel on Retina) where they would otherwise leave a see-through seam. With no
+    /// neighbour on that side the origin is floored, as AppKit would.
+    public static func wholePointOrigin(art: CGRect, frameHeight: CGFloat, neighbours: [CGRect],
+                                        tolerance: CGFloat = 1) -> CGPoint {
+        let exact = CGPoint(x: art.minX, y: art.maxY - frameHeight)
+        let spansX = { (n: CGRect) in art.minX < n.maxX && n.minX < art.maxX }
+        let spansY = { (n: CGRect) in art.minY < n.maxY && n.minY < art.maxY }
+        let hangsUnder = neighbours.contains { spansX($0) && abs(art.maxY - $0.minY) <= tolerance }
+        let leftOf = neighbours.contains { spansY($0) && abs(art.maxX - $0.minX) <= tolerance }
+        let rightOf = neighbours.contains { spansY($0) && abs(art.minX - $0.maxX) <= tolerance }
+        return CGPoint(x: leftOf && !rightOf ? exact.x.rounded(.up) : exact.x.rounded(.down),
+                       y: hangsUnder ? exact.y.rounded(.up) : exact.y.rounded(.down))
+    }
+
     /// Skin height of the main window in its normal or window-shade form (SPEC 2.1, 2.2).
     public static func mainSkinHeight(shaded: Bool) -> Int {
         shaded ? Layout.Shade.size.h : Layout.Main.size.h

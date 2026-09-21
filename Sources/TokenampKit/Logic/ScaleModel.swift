@@ -73,6 +73,16 @@ public enum ScaleModel {
         return best
     }
 
+    /// The scale to use on a screen (SPEC 2.8): the stored preference when there is one, else the
+    /// default *for this screen*, snapped to what the screen can render.
+    ///
+    /// The default is derived from the screen every time, never from the scale currently in use.
+    /// Taking the current scale as the "wanted" one made a first-run 1.5x window that visited a 1x
+    /// display come back to Retina at 2x (1.5 snaps to 2 there, and 2 was then wanted everywhere).
+    public static func resolved(stored: Double?, visibleFrame: CGRect, backing: CGFloat) -> Double {
+        nearest(stored ?? defaultPointScale(visibleFrame: visibleFrame, backing: backing), backing: backing)
+    }
+
     /// `1x`, `1.5x`, `2x` - the menu label for a points-scale.
     public static func label(_ points: Double) -> String {
         let rounded = (points * 100).rounded() / 100

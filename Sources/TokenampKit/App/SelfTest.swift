@@ -79,6 +79,7 @@ public enum SelfTest {
         zipReader(c, tmp: tmp)
         skinLoading(c, tmp: tmp)
         rendering(c)
+        uiFixes(c, tmp: tmp)
 
         print("\n\(c.passed) passed, \(c.failed) failed, \(c.skipped) skipped")
         return c.failed == 0

@@ -10,7 +10,9 @@ import UniformTypeIdentifiers
 ///  * any directory prefix inside the archive is ignored (skins are often zipped with a folder),
 ///  * `.png` beats `.bmp` when both exist,
 ///  * a sheet that is missing, undersized or undecodable never aborts the load; it becomes a
-///    warning and falls back to the Base skin at draw time.
+///    warning and falls back to the Base skin at draw time;
+///  * so does one whose header claims a size far beyond anything a skin needs (`pixelLimit`): the
+///    header is read before a single pixel is decoded.
 public enum SkinLoader {
 
     public enum Error: Swift.Error, CustomStringConvertible {
@@ -55,7 +57,15 @@ public enum SkinLoader {
                                                    options: [.skipsHiddenFiles])
             while let item = e?.nextObject() as? URL {
                 guard (try? item.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { continue }
-                offer(item.lastPathComponent, images: &images, texts: &texts) { try Data(contentsOf: item) }
+                offer(item.lastPathComponent, images: &images, texts: &texts) {
+                    // The same bound an archive member gets (`ZipArchive.maximumMemberBytes`),
+                    // checked before the file is read into memory.
+                    let size = (try? item.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? 0
+                    guard size <= ZipArchive.maximumMemberBytes else {
+                        throw Error.unreadable("\(item.lastPathComponent) is \(size) bytes, more than a skin file may be")
+                    }
+                    return try Data(contentsOf: item)
+                }
             }
         } else {
             let archive: ZipArchive
@@ -121,8 +131,16 @@ public enum SkinLoader {
             }
             do {
                 let data = try candidate.load()
-                guard let image = decodeImage(data) else {
+                let image: CGImage
+                switch decodeImage(data, limit: pixelLimit(for: spec)) {
+                case .image(let decoded):
+                    image = decoded
+                case .undecodable:
                     warnings.append("\(spec.file) could not be decoded - using Base")
+                    continue
+                case .tooLarge(let size):
+                    warnings.append("\(spec.file) claims to be \(size.w)x\(size.h), far beyond the "
+                                    + "\(spec.width)x\(spec.height) sheet - using Base")
                     continue
                 }
                 // `gen` is a Tokenamp extension that happens to share a filename with a sheet
@@ -163,7 +181,9 @@ public enum SkinLoader {
         // grid does not divide evenly is rejected with a warning and the skin falls back to Base's.
         var plfont: CGImage?
         if let c = images["plfont"] {
-            if let d = try? c.load(), let image = decodeImage(d) {
+            let decoded = (try? c.load()).map { decodeImage($0, limit: plfontPixelLimit) } ?? .undecodable
+            switch decoded {
+            case .image(let image):
                 if image.width % PlaylistFont.columns == 0 && image.height % PlaylistFont.rows == 0
                     && image.width > 0 && image.height > 0 {
                     plfont = image
@@ -171,8 +191,10 @@ public enum SkinLoader {
                     warnings.append("plfont is \(image.width)x\(image.height), which is not a "
                                     + "\(PlaylistFont.columns)x\(PlaylistFont.rows) grid - using Base's")
                 }
-            } else {
+            case .undecodable:
                 warnings.append("plfont could not be decoded - using Base's")
+            case .tooLarge(let size):
+                warnings.append("plfont claims to be \(size.w)x\(size.h), far beyond a font sheet - using Base's")
             }
         }
         var plfontMetrics: PlaylistFontMetrics?
@@ -190,12 +212,48 @@ public enum SkinLoader {
                     warnings: warnings)
     }
 
-    /// BMP/PNG (and anything else ImageIO knows) -> CGImage.
-    static func decodeImage(_ data: Data) -> CGImage? {
+    // MARK: - Decoding, bounded
+
+    /// The largest image accepted for a sheet: four times its spec size in each dimension, and never
+    /// less than 512 px, which is room for any real skin - including one drawn at 4x.
+    ///
+    /// A few hundred bytes of header can claim any size: a 270-byte `.wsz` whose main.bmp says
+    /// 30000x30000 took the app to 3.6 GB, a 1.7 KB PNG to 922 MB. The size is read from the header
+    /// first (`CGImageSourceCopyPropertiesAtIndex` decodes nothing), and a sheet over the limit is
+    /// treated as missing, so Base's stands in.
+    public static func pixelLimit(for spec: SheetSpec) -> SkinPair {
+        SkinPair(max(minimumPixelLimit, 4 * spec.width), max(minimumPixelLimit, 4 * spec.height))
+    }
+
+    public static let minimumPixelLimit = 512
+
+    /// `plfont` has no fixed size (SPEC 3.2): four times the recommended 128x60 sheet, with the
+    /// same 512 px floor - cells up to 32x85 skin pixels.
+    public static let plfontPixelLimit = SkinPair(max(minimumPixelLimit, 4 * 128), max(minimumPixelLimit, 4 * 60))
+
+    enum Decoded {
+        case image(CGImage)
+        case undecodable
+        case tooLarge(SkinPair)
+    }
+
+    /// BMP/PNG (and anything else ImageIO knows) -> CGImage, refusing anything larger than `limit`
+    /// before it is decoded. The image is decoded here and now, not on first draw, so a skin that
+    /// loads is one whose pixels are already in hand.
+    static func decodeImage(_ data: Data, limit: SkinPair) -> Decoded {
         guard !data.isEmpty,
               let src = CGImageSourceCreateWithData(data as CFData, nil),
-              CGImageSourceGetCount(src) > 0 else { return nil }
-        let opts: [CFString: Any] = [kCGImageSourceShouldCache: true]
-        return CGImageSourceCreateImageAtIndex(src, 0, opts as CFDictionary)
+              CGImageSourceGetCount(src) > 0 else { return .undecodable }
+        // An image whose header gives no size is not one we can bound, so it is not decoded.
+        guard let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any],
+              let w = (props[kCGImagePropertyPixelWidth] as? NSNumber)?.intValue,
+              let h = (props[kCGImagePropertyPixelHeight] as? NSNumber)?.intValue,
+              w > 0, h > 0 else { return .undecodable }
+        guard w <= limit.w, h <= limit.h else { return .tooLarge(SkinPair(w, h)) }
+        let opts: [CFString: Any] = [kCGImageSourceShouldCache: true, kCGImageSourceShouldCacheImmediately: true]
+        guard let image = CGImageSourceCreateImageAtIndex(src, 0, opts as CFDictionary) else { return .undecodable }
+        // Belt and braces: what came out must agree with what the header promised.
+        guard image.width <= limit.w, image.height <= limit.h else { return .tooLarge(SkinPair(image.width, image.height)) }
+        return .image(image)
     }
 }

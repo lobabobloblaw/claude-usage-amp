@@ -100,8 +100,6 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func toggleShade() { controller?.toggleShade() }
 
     @objc private func showOptions() {
-        guard let c = controller else { return }
-        let view = c.mainWindow.view
-        c.showOptionsMenu(at: NSPoint(x: 10, y: view.bounds.height), in: view)
+        controller?.mainWindow.showOptionsMenuUnderButton()
     }
 }

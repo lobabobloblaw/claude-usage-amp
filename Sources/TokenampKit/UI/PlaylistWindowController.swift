@@ -8,8 +8,13 @@ public final class PlaylistWindowController: NSObject, SkinViewDelegate, NSWindo
     unowned let app: TokenampController
     public let window: SkinWindow
     public let view: SkinView
-    public private(set) var scroll = 0
-    public private(set) var selection: Int?
+    /// Scroll position and selection, the latter held by session id (`SessionListState`).
+    private var list = SessionListState()
+    public var scroll: Int { list.scroll }
+    /// The selected session's row in the list as it is now.
+    public var selection: Int? { list.selectedIndex(in: rowIDs) }
+
+    private var rowIDs: [String] { app.snapshot.sessionsToday.map { $0.id } }
 
     private var draggingStarted = false
     private var resizeStartHeight = 0
@@ -49,6 +54,11 @@ public final class PlaylistWindowController: NSObject, SkinViewDelegate, NSWindo
         view.needsDisplay = true
     }
 
+    /// Every publish: the list may have shrunk, re-sorted or lost the selected session.
+    func dataChanged() {
+        if list.reconcile(ids: rowIDs, visibleRows: visibleRows) { view.needsDisplay = true }
+    }
+
     /// The bottom-right countdown ticks once a second; nothing else in the window does.
     /// It is six glyphs wide (`-03:59`) - invalidating five leaves the last digit stale.
     func refreshMiniTime() {
@@ -78,12 +88,17 @@ public final class PlaylistWindowController: NSObject, SkinViewDelegate, NSWindo
 
     private var rowHeight: Int { app.skin.playlistRowHeight }
 
+    private var visibleRows: Int { PlaylistRenderer.visibleRows(height: skinHeight, rowHeight: rowHeight) }
+
     private var maxScroll: Int {
-        max(0, app.snapshot.sessionsToday.count
-            - PlaylistRenderer.visibleRows(height: skinHeight, rowHeight: rowHeight))
+        SessionListState.maxScroll(count: app.snapshot.sessionsToday.count, visibleRows: visibleRows)
     }
 
-    private func clampScroll() { scroll = min(max(0, scroll), maxScroll) }
+    private func setScroll(_ value: Int) {
+        list.setScroll(value, count: app.snapshot.sessionsToday.count, visibleRows: visibleRows)
+    }
+
+    private func clampScroll() { setScroll(scroll) }
 
     // MARK: - SkinViewDelegate
 
@@ -111,7 +126,7 @@ public final class PlaylistWindowController: NSObject, SkinViewDelegate, NSWindo
             let index = PlaylistRenderer.rowIndex(at: point, width: skinWidth, height: skinHeight,
                                                   scroll: scroll, count: app.snapshot.sessionsToday.count,
                                                   rowHeight: rowHeight)
-            selection = index
+            list.select(index: index, in: rowIDs)
             view.needsDisplay = true
             if clickCount == 2, let index, index < app.snapshot.sessionsToday.count {
                 openRow(index)
@@ -131,7 +146,7 @@ public final class PlaylistWindowController: NSObject, SkinViewDelegate, NSWindo
         if id == .plScroll, let start = scrollDragStartY {
             let track = max(1, skinHeight - Layout.Playlist.titleHeight - Layout.Playlist.bottomHeight - 18)
             let deltaRows = Int(((point.y - start) / CGFloat(track) * CGFloat(max(1, maxScroll))).rounded())
-            scroll = min(max(0, scrollDragStartValue + deltaRows), maxScroll)
+            setScroll(scrollDragStartValue + deltaRows)
             view.needsDisplay = true
         }
     }
@@ -151,7 +166,7 @@ public final class PlaylistWindowController: NSObject, SkinViewDelegate, NSWindo
         guard maxScroll > 0 else { return }
         let step = delta > 0 ? -1 : (delta < 0 ? 1 : 0)
         guard step != 0 else { return }
-        scroll = min(max(0, scroll + step), maxScroll)
+        setScroll(scroll + step)
         view.needsDisplay = true
     }
 
