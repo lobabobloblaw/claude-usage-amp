@@ -136,7 +136,11 @@ public class SkinView: NSView {
     // MARK: - Mouse
 
     public override func mouseDown(with event: NSEvent) {
-        window?.makeKeyAndOrderFront(nil)
+        if let skinWindow = window as? SkinWindow, let raise = skinWindow.raiseWithGroup {
+            raise(skinWindow)
+        } else {
+            window?.makeKeyAndOrderFront(nil)
+        }
         let p = skinPoint(event)
         guard let r = region(at: p) else { return }
         activeRegion = r

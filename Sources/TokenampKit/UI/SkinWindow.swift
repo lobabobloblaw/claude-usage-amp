@@ -17,6 +17,11 @@ public final class SkinWindow: NSWindow {
     public private(set) var skinSize: SkinPair
     public private(set) var pointsScale: Double
 
+    /// Brings this window to the front together with the app's other skinned windows, set by the
+    /// controller. A click raises only the clicked window on current macOS, which left Sessions and
+    /// Token Flow behind other apps while the faceplate came forward; Winamp raised the group.
+    public var raiseWithGroup: ((SkinWindow) -> Void)?
+
     public init(skinSize: SkinPair, scale: Double, title: String) {
         self.skinSize = skinSize
         pointsScale = scale

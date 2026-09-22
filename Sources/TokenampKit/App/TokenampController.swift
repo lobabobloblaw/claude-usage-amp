@@ -113,6 +113,20 @@ public final class TokenampController: NSObject {
     /// A `--skin` override waiting for the first draw before it becomes the stored skin.
     private var skinPathToRemember: String?
 
+    private var activationObserver: NSObjectProtocol?
+
+    /// Bring every open skinned window to the front, keeping their order among themselves, with
+    /// `frontmost` (the clicked one) on top and key. Winamp's windows moved as one stack; macOS
+    /// raises only the window that was clicked.
+    private func raiseWindowGroup(frontmost: SkinWindow?) {
+        let group: [SkinWindow] = [mainWindow?.window, equalizer?.window, playlist?.window, field?.window]
+            .compactMap { $0 }.filter { $0.isVisible }
+        // `orderedWindows` runs front to back; raise back to front so the order is kept.
+        let ordered = NSApp.orderedWindows.compactMap { $0 as? SkinWindow }.filter { w in group.contains { $0 === w } }
+        for window in ordered.reversed() where window !== frontmost { window.orderFront(nil) }
+        (frontmost ?? mainWindow?.window)?.makeKeyAndOrderFront(nil)
+    }
+
     // MARK: - Lifecycle
 
     public func start() {
@@ -131,6 +145,14 @@ public final class TokenampController: NSObject {
         docking.onDragEnd = { [weak self] in
             guard let self, self.scaleReconcilePending else { return }
             self.reconcileScaleWithCurrentScreen()
+        }
+        for window in [mainWindow.window, equalizer.window, playlist.window, field.window] as [SkinWindow] {
+            window.raiseWithGroup = { [weak self] clicked in self?.raiseWindowGroup(frontmost: clicked) }
+        }
+        // Coming back to the app by any route (a click, the Dock, Cmd-Tab) raises the whole stack.
+        activationObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
+            self?.raiseWindowGroup(frontmost: NSApp.keyWindow as? SkinWindow)
         }
 
         // Also applies the stored shade state, before anything is shown.
