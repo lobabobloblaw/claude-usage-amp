@@ -195,7 +195,7 @@ final class Aggregator {
         return n
     }
 
-    /// `/Users/me/Documents/tests/fable5dot1/claude-usage-amp` -> `fable5dot1/claude-usage-amp`.
+    /// `/Users/me/code/tokenamp` -> `code/tokenamp`.
     func projectName(for cwd: String, sessionID: String) -> String {
         if cwd.isEmpty { return sessionID.isEmpty ? "unknown" : String(sessionID.prefix(8)) }
         if let hit = projectNameCache[cwd] { return hit }

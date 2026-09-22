@@ -43,7 +43,7 @@ they looked like physical objects you could touch.
    recommended) drawn as an ink mask: design letterforms that belong to the hardware you are
    depicting, use grey halo pixels where the display technology would bloom or ghost, set the
    metrics (`Monospace`, `Spacing`, `RowHeight`) to suit, and check long mixed-case rows like
-   `fable5dot1/claude-usage-amp - FABLE 5.1   $12.40` at 4× for rhythm, legibility and descenders.
+   `code/tokenamp - FABLE 5.1   $12.40` at 4× for rhythm, legibility and descenders.
 
 ## Hard technical rules (break these and the skin glitches)
 

@@ -13,7 +13,7 @@ from PIL import Image
 from bookcloth_art import type_list as TL, palette as P
 
 LINES = [
-    "1. fable5dot1/claude-usage-amp - FABLE 5.1      $12.40",
+    "1. code/tokenamp - FABLE 5.1      $12.40",
     "2. tokenamp-ui/Sources/TokenampKit/SkinRenderer.swift",
     "6. scratch: quagga glyph jumping - SONNET 5  $1.08",
     "ABCDEFGHIJKLMNOPQRSTUVWXYZ &?!",

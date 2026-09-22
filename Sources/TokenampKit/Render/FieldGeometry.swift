@@ -486,7 +486,7 @@ public enum FieldGeometry {
         return out
     }
 
-    /// `fable5dot1/claude-usage-amp` -> `CLAUDE-USAGE-AMP`: the leaf is what identifies the work.
+    /// `code/tokenamp` -> `TOKENAMP`: the leaf is what identifies the work.
     static func shortProject(_ p: String) -> String {
         (p.split(separator: "/").last.map(String.init) ?? p).uppercased()
     }

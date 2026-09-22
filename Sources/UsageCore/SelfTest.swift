@@ -418,14 +418,14 @@ public enum SelfTest {
 
         r.section("project labels")
         let home = NSHomeDirectory()
-        r.equal(agg.projectName(for: home + "/Documents/tests/fable5dot1/claude-usage-amp", sessionID: "x"),
-                "fable5dot1/claude-usage-amp", "two trailing components")
+        r.equal(agg.projectName(for: home + "/code/tokenamp", sessionID: "x"),
+                "code/tokenamp", "two trailing components")
         r.equal(agg.projectName(for: home, sessionID: "x"), "~", "home itself")
         r.equal(agg.projectName(for: "/tmp", sessionID: "x"), "tmp", "single component")
         r.equal(agg.projectName(for: home + "/Library/Application Support/Claude/scratch-workspaces/28e9f5fc-6789-4058-942b-d18a6b3eae0b/48793b39-359c-4729-a407-fd3afa6321f3/scratch-2026-09-20", sessionID: "x"),
                 "scratch-workspaces/scratch-2026-09-20", "uuid directories dropped")
         r.expect(Aggregator.looksLikeUUID("48793b39-359c-4729-a407-fd3afa6321f3"), "uuid recognised")
-        r.expect(!Aggregator.looksLikeUUID("claude-usage-amp"), "project name is not a uuid")
+        r.expect(!Aggregator.looksLikeUUID("tokenamp"), "project name is not a uuid")
         r.equal(agg.projectName(for: "", sessionID: "abcdefgh-1234"), "abcdefgh", "no cwd falls back to the session id")
     }
 

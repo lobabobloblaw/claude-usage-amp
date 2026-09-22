@@ -171,7 +171,7 @@ extension SelfTest {
         // The real faces: each must still give legible, solid glyphs at the cut.
         for name in ["Base"] {
             guard let pf = Skin.base.playlistFont else { continue }
-            let box = pf.hardInkBox("CLAUDE-USAGE")
+            let box = pf.hardInkBox("EVAL-HARNESS")
             c.check("\(name) plfont sets a label at the cut", (box?.w ?? 0) > 20 && pf.capRows.height >= 5)
         }
     }
@@ -180,7 +180,7 @@ extension SelfTest {
 
     private static func fieldLabelFitting(_ c: Checker) {
         let m = FieldLabelMetrics.classic
-        let long = "CLAUDE-USAGE-AMP"
+        let long = "TERRAFORM-LIVE"
         let cut = m.fit(long, maxWidth: 50)
         c.check("a long name is cut to fit", cut.map { m.width($0) <= 50 } ?? false)
         c.check("with the ellipsis", cut?.hasSuffix("\u{2026}") ?? false)

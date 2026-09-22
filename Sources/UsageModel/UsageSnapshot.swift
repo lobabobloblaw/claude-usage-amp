@@ -100,7 +100,7 @@ public struct LimitGauge: Sendable, Equatable, Codable, Identifiable {
 /// One Claude Code session (a transcript file plus its subagent transcripts) seen today.
 public struct SessionRow: Sendable, Equatable, Codable, Identifiable {
     public var id: String               // session UUID
-    public var project: String          // short display name, e.g. "fable5dot1/claude-usage-amp"
+    public var project: String          // short display name, e.g. "code/tokenamp"
     public var cwd: String?             // full working directory if known
     public var model: String            // short display name of the dominant model, e.g. "FABLE 5.1"
     public var tokens: TokenCounts

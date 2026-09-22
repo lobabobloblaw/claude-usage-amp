@@ -129,7 +129,7 @@ public final class DemoUsageProvider: UsageProvider {
         let today = days.last ?? UsageBucket(start: startOfToday, duration: 86400)
 
         let projects: [(String, String, Double)] = [
-            ("fable5dot1/claude-usage-amp", "FABLE 5.1", 0.34),
+            ("code/tokenamp", "FABLE 5.1", 0.34),
             ("web/storefront-checkout", "OPUS 5", 0.22),
             ("infra/terraform-live", "SONNET 5", 0.16),
             ("research/eval-harness", "FABLE 5.1", 0.12),

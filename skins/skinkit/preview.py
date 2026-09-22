@@ -82,7 +82,7 @@ EQ_BANDS = (0.22, 0.35, 0.30, 0.52, 0.68, 0.61, 0.80, 0.74, 0.90, 0.55)
 EQ_PREAMP = 0.62
 
 PLAYLIST_ROWS = (
-    ("1. fable5dot1/claude-usage-amp - FABLE 5.1", "$12.40"),
+    ("1. code/tokenamp - FABLE 5.1", "$12.40"),
     # long enough to exercise SPEC 3.2 ellipsis truncation
     ("2. tokenamp-ui/Sources/TokenampKit/SkinRenderer.swift - OPUS 5", "$8.15"),
     ("3. skinkit preview compositor - SONNET 5", "$3.90"),
