@@ -12,6 +12,7 @@ import numpy as np
 from skinkit.spec import Rect, lrect, lval, clutter_button_local, clutter_letters
 
 from . import doodles as D
+from . import marks
 from . import materials as M
 from . import palette as P
 from . import pictos
@@ -77,7 +78,6 @@ class MainMixin:
         self._panel_right(p)
         self._posbar_slot(p)
         self._cover_marks(p)
-        self.paint_about_logo(c.sub(lrect("main", "aboutLogo")))
         p.opaque()
 
     def _spine_stitching(self, p: Plate) -> None:
@@ -98,7 +98,7 @@ class MainMixin:
         T.letterpress(p, 25, 62, "FIG.1", "micro", ink=P.INK_SOFT)
         T.letterpress(p, 47, 62, "TOKEN FLOW", "micro", ink=P.INK_BODY)
         D.wobble_line(p, 47, 85, 68 - 0, P.CLAY_DEEP, a=0.0)   # reserved
-        D.spark(p, 92, 61, 7, P.CLAY_DEEP, 0.95)
+        marks.mark(p, 95, 64, "tiny")
         # pencil guide-lines someone forgot to erase, above the time plate
         D.pencil_rule(p, 22, 99, 21, a=0.50, seed=2)
 
@@ -124,7 +124,7 @@ class MainMixin:
         T.letterpress(p, 111, 19, "CLAUDE USAGE", "micro", ink=P.INK_BODY)
         p.hline(161, 253, 21, P.INK_GREY, 0.55)
         p.hline(161, 253, 22, P.PAPER_HI, 0.8)
-        D.spark(p, 257, 18, 7, P.CLAY_DEEP, 0.95)
+        marks.mark(p, 260, 21, "tiny")
         for key in ("kbps", "khz"):
             r = lrect("main", key)
             M.plate_mark(p, r.x, r.y, r.w, r.h, margin=2)
@@ -159,13 +159,17 @@ class MainMixin:
             T.letterpress(p, tx + 2, y, lab, "micro", ink=P.INK_SOFT, lip=0.0)
 
     def _cover_marks(self, p: Plate) -> None:
-        """Blind-debossed maker's mark along the foot of the cover."""
+        """Blind-debossed maker's line along the foot of the cover, and the
+        monogram roundel -- the primary mark -- in the clear cloth at the
+        lower right."""
         T.blind(p, 18, 109, "HAND BOUND · TOKENAMP · No 5.1", "micro", on="cloth")
+        marks.hero(p)
 
     def paint_about_logo(self, c) -> None:
-        p = Plate(c)
-        m = D.SPARK_13
-        T.foil(p, 253, 92, "", cov=m, seed=5)
+        """The monogram roundel seen through the about-logo porthole; the
+        full roundel is painted by ``_cover_marks`` and spills beyond this
+        rect."""
+        marks.hero(Plate(c))
 
     # ------------------------------------------------------------------
     # title bar
@@ -218,11 +222,23 @@ class MainMixin:
         text = "TOKENAMP"
         tx, tw = self._title_text(p, text, active)
         if variant == "easter":
-            D.spark(p, tx - 12, 3, 7, P.PAPER_HI, 0.9)
-            D.spark(p, tx + tw + 5, 3, 7, P.PAPER_HI, 0.9)
-        # a line of stitches either side of the title
-        M.stitch_run(p, 26, 6, tx - 8 - 26, vertical=False, pitch=7, stitch=4, seed=11)
-        M.stitch_run(p, tx + tw + 8, 6, 232 - (tx + tw + 8), vertical=False, pitch=7,
+            # a foil lozenge either side of the title, a word space off its ink
+            cov = T.coverage(text, "list", spacing=2, space=5)
+            ink = np.nonzero((cov >= 0.5).any(axis=0))[0]
+            half = marks.mask("tiny").shape[1] // 2
+            lx, rx = tx + int(ink[0]) - 6 - half, tx + int(ink[-1]) + 6 + half
+            marks.foil_mark(p, lx, 6)
+            marks.foil_mark(p, rx, 6)
+            left_end, right_start = lx - half - 3, rx + half + 4
+        else:
+            left_end, right_start = tx - 8, tx + tw + 8
+        # a line of stitches either side of the title.  Beside the lozenges the
+        # left run is set from its inner end, so both runs stop the same two
+        # pixels short of their lozenge.
+        n = left_end - 26
+        M.stitch_run(p, 26, 6, n, vertical=False, pitch=7, stitch=4, seed=11,
+                     phase=(n - 4) % 7 if variant == "easter" else 0)
+        M.stitch_run(p, right_start, 6, 232 - right_start, vertical=False, pitch=7,
                      stitch=4, seed=12)
         p.opaque()
 
@@ -242,8 +258,8 @@ class MainMixin:
         p.px(cx, gy + 1, P.INK_BODY)
         p.px(cx, gy + 4, P.INK_BODY)
         T.foil(p, 24, 1, "", cov=T.coverage("T", "list"), dull=0.0 if active else 0.55, seed=3)
-        D.spark(p, 33, 4, 5, P.PAPER_FLAT, 0.95 if active else 0.6)
-        M.stitch_run(p, 42, 6, 30, vertical=False, pitch=7, stitch=4, seed=13)
+        marks.shade_mark(p)
+        M.stitch_run(p, 47, 6, 26, vertical=False, pitch=7, stitch=4, seed=13)
         for key in ("previous", "play", "pause", "stop", "next", "eject"):
             r = lrect("shade", key)
             m = pictos.MINI[key]

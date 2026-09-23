@@ -12,6 +12,7 @@ import numpy as np
 from skinkit.spec import lrect, lval
 
 from . import doodles as D
+from . import marks
 from . import materials as M
 from . import palette as P
 from . import typeset as T
@@ -84,7 +85,7 @@ class EqMixin:
         # blind-stamped note in the clear band under the buttons -- the foot
         # belongs to the band captions
         T.blind(p, 14, 32, "LAB NOTE No 5.1", "micro", on="paper", strength=0.85)
-        D.spark(p, 252, H - 11, 7, P.CLAY_DEEP, 0.8)
+        marks.mark(p, 264, H - 11, "tiny")
         p.opaque()
 
     # The slider sprite owns every row of its 14x63 rect, so a caption drawn

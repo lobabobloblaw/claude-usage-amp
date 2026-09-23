@@ -16,6 +16,7 @@ import numpy as np
 from skinkit.spec import lval
 
 from . import doodles as D
+from . import marks
 from . import materials as M
 from . import palette as P
 from . import type_list
@@ -178,7 +179,7 @@ class PlaylistMixin:
         D.wobble_line(p, lx + 5, lx + 44, ly + 9, P.CLAY_DEEP, a=0.8, seed=5)
         T.letterpress(p, lx + 5, ly + 12, "A LEDGER OF", "micro", ink=P.INK_SOFT)
         T.letterpress(p, lx + 5, ly + 19, "TOKENS SPENT", "micro", ink=P.INK_SOFT)
-        D.spark(p, lx + 86, ly + 15, 9, P.CLAY_DEEP, 0.9)
+        marks.mark(p, lx + 86, ly + 13, "colophon")
         p.opaque()
 
     def paint_pl_bottom_right(self, c) -> None:

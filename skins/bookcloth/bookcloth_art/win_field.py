@@ -354,8 +354,8 @@ class FieldMixin:
         p.hline(x + 2, x + 8, y + 8, P.SHADOW_ON_CLOTH, 0.45)
         p.vline(x + 8, y + 2, y + 7, P.SHADOW_ON_CLOTH, 0.40)
         if lit:
-            # struck: a seal of clay ink with the spark knocked out of it, and
-            # a hair of ink spread into the fibres round the edge
+            # struck: a solid seal of clay ink, with a hair of ink spread
+            # into the fibres round the edge
             p.mask(x + 1, y + 1, _SEAL_BLEED, P.CLAY_PALE, 0.35)
             p.mask(x + 2, y + 2, _SEAL, P.CLAY_DEEP)
             p.px(x + 3, y + 3, P.CLAY, 0.75)          # the sheen on the wax

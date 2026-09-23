@@ -9,8 +9,9 @@ The art lives in ``bookcloth_art``; this file maps the skinkit hooks onto it
 and supplies the tokens, the palettes and the readme.
 
 Fan-made tribute skin.  It evokes a warm, humane, hand-made visual language
-through materials, palette, type and its own hand-drawn burst motif; it does
-not reproduce anyone's logo or wordmark.
+through materials, palette and type, and signs itself with its own letterpress
+monogram (a serif T, and a lozenge where the mark is small); it does not
+reproduce anyone's logo or wordmark.
 """
 
 from __future__ import annotations
@@ -78,7 +79,9 @@ class Bookcloth(MainMixin, WidgetMixin, EqMixin, PlaylistMixin, FieldMixin, Them
                 "clay-orange book cloth, paper panels let into the boards, labels\r\n"
                 "letterpressed into the stock, linen thread stitching and slate ink\r\n"
                 "that has bled a hair into the fibres.  The equaliser is a page from a\r\n"
-                "lab notebook; the Sessions window is a ledger card.\r\n\r\n"
+                "lab notebook; the Sessions window is a ledger card.  The maker's\r\n"
+                "mark is a letterpress monogram: a serif T printed in clay on an ivory\r\n"
+                "roundel, with a clay lozenge wherever the mark is small.\r\n\r\n"
                 "Classic Winamp 2.x skin for Tokenamp, painted in code with skinkit.\r\n"
                 "Typefaces (all drawn for this skin): a literary old-style serif for\r\n"
                 "the Sessions list (plfont), a 5x6 letterpress proofing face for the\r\n"

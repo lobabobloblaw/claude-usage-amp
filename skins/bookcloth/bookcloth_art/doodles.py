@@ -1,8 +1,8 @@
 """doodles -- the hand-drawn marks printed on the paper and stamped in the cloth.
 
-All original drawings: an open-centred, uneven "spark" (eight rays of unequal
-length that never meet in the middle), a node-and-line constellation, a wobbly
-pen underline, a pencil registration cross, a paper clip, washi tape.
+All original drawings: a node-and-line constellation, a wobbly pen underline,
+a pencil registration cross, a paper clip, washi tape.  The maker's mark --
+the T monogram and its lozenge -- lives in ``marks.py``.
 
 Masks use ``#`` full ink, ``+`` soft ink, ``.`` nothing.
 """
@@ -20,60 +20,6 @@ def _m(art: str) -> np.ndarray:
     w = max(len(r) for r in rows)
     lut = {"#": 1.0, "+": 0.55, ":": 0.28}
     return np.array([[lut.get(k, 0.0) for k in r.ljust(w, ".")] for r in rows], dtype=np.float32)
-
-
-# a spark drawn with a dip pen: rays of unequal length, open centre
-SPARK_13 = _m("""
-.....#.......
-.....#....+..
-.+...#+..#...
-..#...#.#+...
-...#+...+....
-....:.....+##
-###+.........
-.........+...
-...+#...#+...
-..#+..#..#...
-.#....#...#..
-......#+...+.
-......+#.....
-""")
-
-SPARK_9 = _m("""
-...#.....
-...#..#..
-.#..+#...
-..#......
-......+##
-##+......
-...#.+#..
-..#..#.#.
-....+#...
-""")
-
-SPARK_7 = _m("""
-..#....
-..#..#.
-#..+#..
-.+...##
-##...+.
-..#+..#
-.#..#..
-""")
-
-SPARK_5 = _m("""
-.#..#
-..+..
-#+.+#
-..+..
-#..#.
-""")
-
-
-def spark(p: Plate, x: int, y: int, size: int = 13, col=P.INK_BODY, a: float = 1.0):
-    m = {13: SPARK_13, 9: SPARK_9, 7: SPARK_7, 5: SPARK_5}[size]
-    p.mask(x, y, m, col, a)
-    return m
 
 
 def wobble_line(p: Plate, x0: int, x1: int, y: int, col=P.INK_BODY, a: float = 0.9,

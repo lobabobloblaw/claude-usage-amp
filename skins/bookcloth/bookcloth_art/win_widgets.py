@@ -15,7 +15,7 @@ import numpy as np
 
 from skinkit.spec import clutter_button_local, clutter_letters, lrect, lval
 
-from . import doodles as D
+from . import marks
 from . import materials as M
 from . import palette as P
 from . import pictos
@@ -276,10 +276,16 @@ class WidgetMixin:
         cov = T.coverage(text, "micro")
         x = _centre(r.x, r.w, cov.shape[1])
         y = r.y + (r.h - cov.shape[0]) // 2
+        if text == "LIVE":
+            # the stamp carries the lozenge ahead of the word; set the pair
+            # as one group, centred, so the lozenge stays inside the sprite
+            sw = marks.mask("tiny").shape[1]
+            gx = _centre(r.x, r.w, sw + 2 + cov.shape[1])
+            x = gx + sw + 2
         if on:
             T.rubber_stamp(p, x, y, cov, ink=ink, seed=seed)
             if text == "LIVE":
-                D.spark(p, x - 8, y - 1, 7, P.CLAY_DEEP, 0.85)
+                marks.stamp_mark(p, gx + sw // 2, y + 2, seed=seed)
         else:
             # off is not dark, it is simply not stamped: a blind deboss
             T.blind(p, x, y, "", cov=cov, on="paper", strength=0.75)
@@ -292,7 +298,7 @@ class WidgetMixin:
         self._stamp(c, "LIVE", on, P.CLAY_DEEP, 2)
 
     # ==================================================================
-    # play state and the work spark
+    # play state and the work lozenge
     # ==================================================================
     def paint_play_state(self, c, state: str) -> None:
         p = Plate(c)
@@ -306,7 +312,7 @@ class WidgetMixin:
     def paint_work_indicator(self, c, working: bool) -> None:
         p = Plate(c)
         if working:
-            D.spark(p, p.ox - 2, p.oy + 1, 7, P.CLAY_DEEP, 0.95)
+            marks.work(p, p.ox, p.oy, c.h)
         else:
             p.px(p.ox, p.oy + 4, P.PAPER_SH, 0.85)
             p.px(p.ox + 1, p.oy + 4, P.PAPER_DEEP, 0.55)

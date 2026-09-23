@@ -18,10 +18,11 @@ the calmest and the most elegant.
 
 **Brand handling (important).** This is a fan-made tribute for the user's personal tool, not an
 official product. Evoke the identity through palette, materials, typography and illustration
-style. Draw your **own** hand-drawn radiating burst/spark motif and your own node-and-line
-doodles; do **not** trace or attempt to reproduce Anthropic's or Claude's official logo geometry or
-wordmark, and do not label anything as official. Plain descriptive text such as `CLAUDE USAGE` is
-fine. Your `readme()` must end with: `Fan-made tribute skin. Not affiliated with or endorsed by Anthropic.`
+style. The maker's mark is the skin's **own** letterpress monogram (see *The maker's mark*
+below) and the doodles are your own node-and-line drawings; do **not** trace or attempt to
+reproduce Anthropic's or Claude's official logo geometry or wordmark, and do not label anything
+as official. Plain descriptive text such as `CLAUDE USAGE` is fine. Your `readme()` must end
+with: `Fan-made tribute skin. Not affiliated with or endorsed by Anthropic.`
 
 ## Palette ramps (starting point — tune by eye)
 
@@ -41,9 +42,20 @@ fine. Your `readme()` must end with: `Fan-made tribute skin. Not affiliated with
   inset **paper panels** let into the cloth — each panel a cut opening showing ivory laid paper
   beneath, with a bevelled cut edge (you see the board's core) and an inner shadow. A stitched
   spine down the left behind the clutterbar (linen thread, individual stitches with shadows).
-  Hand-drawn slate-ink doodles printed on the paper where space allows: a small radiating burst,
-  a node-and-line constellation, a wobbly underline. A pencil registration mark. A tiny blind-
-  debossed maker's mark.
+  Hand-drawn slate-ink doodles printed on the paper where space allows: a node-and-line
+  constellation, a wobbly underline. A pencil registration mark. A blind-debossed maker's line
+  along the foot of the cover, and the maker's mark in its roundel at the lower right.
+- **The maker's mark.** A letterpress monogram, drawn for this skin: a bold serif capital `T`
+  (for Tokenamp) printed in clay ink on a disc of ivory stock let into the cloth, inside a
+  blind-struck ring. Three-pixel stem, two-row bar ending in bracketed beak serifs, a bracketed
+  slab foot, a hair of ink squash at the edges. It must read unmistakably as a serif T at the
+  app's usual 1.5× on a Retina display (3 device pixels per skin pixel). Where the mark is small
+  (5–7 px) nothing figurative survives, so it becomes a **solid clay lozenge** set at the cap
+  height of the small capitals beside it: after the running head and the figure caption, on the
+  EQ page, rubber-stamped ahead of `LIVE`, as the work indicator, in a miniature roundel on the
+  shade strip, and foil-stamped either side of the title on the easter-egg spine. The Sessions
+  colophon has room for a small `T`. (A radiating starburst was tried first and rejected: at that
+  scale its rays read as specks.)
 - **Displays are print, not screens.** The time/marquee/numeric wells are flat ivory paper
   (`#f0eee6`-ish, one flat colour per the hard rules). Digits, text and visualizer are **ink**.
 - **Time digits.** Letterpress numerals: a sturdy old-style/Clarendon-flavoured serif figure in
@@ -67,11 +79,11 @@ fine. Your `readme()` must end with: `Fan-made tribute skin. Not affiliated with
   red-clay when nearly full, with a slightly irregular hand-painted leading edge. `SESSION` /
   `WEEK` letterpressed beside them. Thumbs: small terracotta tiles.
 - **LOCAL / LIVE.** Rubber stamps, not lamps: off = a blind deboss barely visible in the paper;
-  on = stamped — `LOCAL` in slate ink, `LIVE` in clay orange with a tiny burst — slightly rotated
+  on = stamped — `LOCAL` in slate ink, `LIVE` in clay orange with a tiny lozenge — slightly rotated
   or unevenly inked the way real stamps are (within the sprite's pixel budget).
 - **CYCLE / ALERT, EQ / PL.** Paper tabs with a hand-drawn checkbox: empty ink square when off,
   filled with clay orange (and a little overshoot outside the lines) when selected.
-- **Play state / work indicator.** Inked pictograms; the work indicator is a tiny spark.
+- **Play state / work indicator.** Inked pictograms; the work indicator is a tiny clay lozenge.
 - **Title bar.** The book's spine/top edge: book cloth with **ivory foil-stamped** serif
   `TOKENAMP`, a line of stitches, head-band threads at the ends. Inactive: the cloth sun-faded
   toward kraft, foil duller. Title buttons: foil pictograms on cloth; pressed = darker cloth.
@@ -84,9 +96,9 @@ fine. Your `readme()` must end with: `Fan-made tribute skin. Not affiliated with
   ring ghost if you can make it subtle enough to be charming rather than dirty.
 - **Playlist ("SESSIONS") = a ledger card.** Book-cloth frame with the ivory page inside; the
   right side shows the **fore-edge of the page block** (fine stacked page lines) and the scroll
-  handle is a **ribbon bookmark**; the footer is a colophon: serif small caps, a hand-drawn burst,
-  a ruled line. pledit colours: background `#f0eee6`, normal text `#3d3d3a`, current `#c15f3c`,
-  selection `#ebdbbc`.
+  handle is a **ribbon bookmark**; the footer is a colophon: serif small caps, the small
+  monogram `T`, a ruled line. pledit colours: background `#f0eee6`, normal text `#3d3d3a`,
+  current `#c15f3c`, selection `#ebdbbc`.
 - **Sessions typeface (`plfont`).** A literary old-style serif pixel face — bracketed serifs,
   two-storey `a`, a graceful `g`, slightly condensed so long project paths fit; proportional,
   `Spacing=1`; ink-spread via a few low-coverage grey pixels at stroke joins. It should feel
