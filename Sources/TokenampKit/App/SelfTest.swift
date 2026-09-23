@@ -78,6 +78,7 @@ public enum SelfTest {
         textFileParsers(c)
         zipReader(c, tmp: tmp)
         skinLoading(c, tmp: tmp)
+        skinInputLimits(c, tmp: tmp)    // SelfTest+SkinInput.swift (amendment A8)
         rendering(c)
         uiFixes(c, tmp: tmp)
 

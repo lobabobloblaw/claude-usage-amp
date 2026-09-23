@@ -40,6 +40,48 @@ It really whips the llama's tokens.
 > most one device pixel and never gap (§2.8). The phosphor beam lights whole pixels instead of
 > splatting bilinearly, and the Token Flow window is capped at 1000×725 skin pixels (§3.3). Limit
 > alerts are recorded in a persisted ledger (limit id, reset minute, threshold).
+> **A7 (2026-09-22, user request):** the Sessions window **fits its sessions** instead of showing
+> rows of empty list. With **Fit to Sessions** on (the default, persisted; a checkable item in the
+> Sessions context menu) its height is the smallest valid one (116, then 29 px steps) whose list
+> shows every row of `sessionsToday` at the skin's `plfont` pitch; no sessions gives 116. It is
+> capped so that Sessions and every window docked below it stay inside the visible frame of the
+> screen Sessions is on, never below 116; past the cap the list scrolls. It refits on every
+> publish, skin change and scale change, at the end of a window drag and when the window is shown,
+> and never during a window drag or a grip resize; while transcripts are still being scanned it may
+> grow but not shrink. Dragging the resize grip turns it off and resizes
+> by hand as before; turning it back on refits at once. Every Sessions height change, from the grip
+> or from auto-fit, keeps the top-left fixed (A6) and moves the windows docked below it (hanging
+> under it, transitively, and lying wholly below its bottom edge) by as far as that edge moved, in
+> whole points rounded towards Sessions, so the column stays flush; nothing else moves (§2.4, §2.7).
+> A Token Flow height change (its grip) moves the windows docked below it the same way; Sessions
+> does not refit while Token Flow's grip is held, and refits when it is let go (§2.9).
+> **A8 (2026-09-22, review fixes: skin input limits):** a skin is untrusted input from the internet,
+> so every limit is checked before a byte is read, inflated or decoded (§3). **Formats:** an image is
+> `.bmp` or `.png` *and* its bytes must be BMP or PNG: ImageIO gets a type hint and the type it sniffs
+> is checked before any codec parses. `.gif`, `.jpg`/`.jpeg` and `.tif`/`.tiff` files are ignored;
+> TIFF or JPEG bytes named `.bmp` are a warning and Base's sheet. **Sizes:** `viscolor.txt`,
+> `pledit.txt`, `region.txt` and `plfont.txt` at most 128 KiB each; an image at most 4 bytes per pixel
+> of its pixel limit plus 64 KiB (eqmain about 5.3 MiB, the small sheets 1 MiB). The archive's
+> declared size (and a stored member's stored size) or a folder file's size on disk is checked, and
+> inflating never writes past the declared size; an oversized file is a warning and counts as
+> missing. A `region.txt` window shape lists at most 8192 points; a section with more is dropped
+> whole and that window stays rectangular. Decoded sheets are copied into bitmaps the app owns, so
+> nothing of the file stays in memory. **What is a skin:** an archive or folder with at least one
+> sheet (`main.bmp`, `EQMAIN.PNG`, ...); a folder skin is its own top-level files, and subfolders are
+> not searched (inside an archive any directory prefix, written with `/` or `\`, is still ignored).
+> Installing refuses a folder that is or holds the skins folder, copies only the top-level files the
+> loader reads, each within its limit, and leaves an archive over the sum of all limits (about 35 MB)
+> where it is. **Finder:** the app declares `.wsz` as an imported type conforming to
+> `public.zip-archive` and claims only that, not every zip; a `.wsz` that launches the app is applied
+> once the app has started.
+> **A9 (2026-09-22, review fixes: data layer):** a transcript whose mtime leaves the 10-day window
+> is no longer read but keeps its sightings until eviction; it is dropped once it holds no events,
+> or once it is more than a day past the event TTL, so a copy can never take over its responses
+> and re-date them (A5: earliest sighting wins). Evicted message ids are remembered with their
+> earliest-sighting time for 30 days after that time, persisted as the optional `evicted` key
+> (grouped by UTC day) of the v2 scan cache; a later sighting of a remembered id is not counted.
+> Transcript lines stamped outside 1970 … year 3000 are ignored. Cache integers (size, offset,
+> inode) are unsigned 64-bit, and a malformed cache is always rejected, never a crash (§4.1).
 
 Toolchain on this machine: Swift 6.3 via Command Line Tools only. **No Xcode, no XCTest, no
 xcodebuild.** Everything builds with `swift build` and a shell script assembles the `.app`.
@@ -129,10 +171,27 @@ A shaded, always-on-top strip is the app's "glanceable" form, so it must work we
   every slider here is a read-only gauge, so unlike the other three windows it earns its place on
   screen only when it is asked for.
 
-### 2.4 Playlist window (275×232 default, vertical resize in 29 px steps) — "Sessions"
+### 2.4 Playlist window (275 wide, fits its sessions by default, vertical resize in 29 px steps) — "Sessions"
 
 - Rows = `snapshot.sessionsToday`: `N. <project> - <MODEL>` left, right-aligned cost (`$12.40`) or
   tokens (`1.2M`) — toggled from the context menu, default cost.
+- **Height (amendment A7).** Valid heights are 116, then 29 px steps. With **Fit to Sessions** on
+  (the default) the window takes the smallest valid height whose list shows every session at the
+  skin's `plfont` row pitch (§3.2) — 116 with none — capped so that it and every window docked
+  below it stay inside the visible frame of its screen, never below 116; past the cap the list
+  scrolls. It refits when the data is published, the skin or scale changes, a window drag ends and
+  the window is shown, never during a window drag or a grip resize, and while transcripts are still
+  being scanned it may grow but not shrink. Dragging the bottom-right grip
+  turns Fit to Sessions off and sizes the window by hand. One persisted height serves both, so
+  turning Fit to Sessions off leaves the window as it is, and a launch creates it at the height it
+  last had (232 on a first run) before fitting it.
+- **What is docked below follows.** Any height change keeps the top-left fixed (A6) and moves every
+  window docked below Sessions — hanging under it, transitively, and lying wholly below its bottom
+  edge — by as far as that edge moved, in whole points with the edge rounded up (towards Sessions),
+  so the column stays flush and each moved position is saved. Windows docked above or beside it,
+  and windows not docked to it, stay where they are.
+- Context menu: Show Cost / Show Tokens · Fit to Sessions (checkable) · Reveal Selected in Finder ·
+  Tokenamp Options ▸, each group separated.
 - Text is drawn with the **skin's own bitmap typeface** (`plfont`, §3.2) in skin pixels, crisp and
   nearest-neighbour scaled like every other element — never with a system/vector font (amendment A1:
   a generic Arial list inside hand-made pixel hardware looks pasted-on). Colours from pledit.txt tint
@@ -205,7 +264,8 @@ Poll Every ▸ 30 s / 1 min / 2 min / 5 min, Playlist Shows ▸ Cost / Tokens, D
 Menu Bar Readout (toggle; an `NSStatusItem` showing `42%·2h47m`) · About Tokenamp · Quit.
 
 The app is a regular Dock app with a minimal main menu (About, Quit ⌘Q, Window). Persist in
-`UserDefaults`: skin path, scale (default chosen per screen, §2.8), window top-left corners (A6), which windows are open, shade state,
+`UserDefaults`: skin path (a `--skin` path is stored absolute, so a launch from Finder finds it),
+scale (default chosen per screen, §2.8), window top-left corners (A6), which windows are open, shade state,
 always-on-top, toggles, visualizer mode, EQ range/measure, poll interval, and the Token Flow
 window's top-left corner, size, open state, configuration, AUTO and span. Dropping a `.wsz`/`.zip`/folder
 onto any window loads it as the skin and copies it into the user skins folder
@@ -221,8 +281,13 @@ neighbours along could never be pulled out of a stack, because everything it tou
 it and it would never appear to move at all. Default placement: the main window at the top,
 **Sessions** under it and **Token Flow** under that, flush. The **Usage Equalizer** takes the foot
 of the column but starts closed (§2.3), so the app opens with three windows, not four. A window with
-no stored origin is placed at the foot of whatever is on screen when it is opened, rather than
-landing on top of another window.
+no stored origin, or with one on no screen, is placed at the foot of whatever is on screen when it is
+opened - at launch too - rather than landing on top of another window; choosing a window that is
+open on no screen from a Windows menu brings it back that way instead of closing it. A main window
+on no screen (its display was unplugged) is brought back with the windows docked to it, as one group,
+at launch and whenever it is brought to the front (Window > Main Window, the Dock icon); windows
+still on a screen stay where they are. When Sessions or Token Flow changes height, the windows
+docked below it move with its bottom edge and nothing else does (§2.4, amendment A7).
 
 ### 2.8 Scale (amendment A2)
 
@@ -244,22 +309,31 @@ landing on top of another window.
   uses the exact scaled skin size, not the rounded window size, so docked windows stay pixel-flush
   (to within one device pixel of overlap, never a gap: window origins are whole points, A6).
 - Changing scale keeps the main window's top-left corner fixed and re-lays-out docked windows so
-  they stay docked. If the stack would extend past the visible frame, shift it back on screen.
+  they stay docked. If the stack would extend past the visible frame, shift it back on screen: the
+  main window's docked group moves as one, by whole points, the shortest way into the visible frame
+  of the main window's screen; a group taller than that keeps its top at the top (one wider, its
+  left edge at the left). Nothing moves while every window of the group lies wholly on some screen.
+  The same check runs at launch, and when a window opened at the foot of the column would land past
+  the bottom.
 - `--snapshot … --scale N` takes `ppsp` directly (PNG pixels per skin pixel, integer ≥ 1).
 
 ## 3. Skin engine
 
-- A skin is a `.wsz`/`.zip` archive or a plain directory. File lookup is **case-insensitive** and
-  ignores any directory prefix inside the archive. Images may be `.bmp` or `.png` (a `.png` wins if
-  both exist). ZIP reading is in-process: parse the central directory, support methods 0 (stored)
-  and 8 (deflate, via the Compression framework, `COMPRESSION_ZLIB` = raw deflate). No temp files.
-- Decode with ImageIO into `CGImage`. Sheets smaller than the spec (old skins) must not crash: a
-  sprite rect that falls outside its sheet is clipped/omitted.
+- A skin is a `.wsz`/`.zip` archive or a plain directory with at least one sheet in it. File lookup
+  is **case-insensitive** and ignores any directory prefix inside the archive (`/` or `\`); a plain
+  directory is its own top-level files only (A8). Images may be `.bmp` or `.png` (a `.png` wins if
+  both exist), and the bytes must be BMP or PNG. ZIP reading is in-process: parse the central
+  directory, support methods 0 (stored) and 8 (deflate, via the Compression framework,
+  `COMPRESSION_ZLIB` = raw deflate). No temp files. Every file is held to a size limit for its kind
+  before it is read or inflated (A8).
+- Decode with ImageIO's BMP and PNG codecs only, into a `CGImage` the app owns (A8). Sheets smaller
+  than the spec (old skins) must not crash: a sprite rect that falls outside its sheet is
+  clipped/omitted.
 - Missing optional sheets fall back to the bundled **Base** skin's sheet. A skin missing a required
   sheet still loads with Base fallbacks plus a warning in the info panel. `nums_ex` preferred over `numbers`.
 - `viscolor.txt`, `pledit.txt`, `region.txt` parsed leniently (CRLF, comments, stray spaces,
   Latin-1 bytes). `region.txt` is applied as a window shape mask when present (clip drawing and
-  hit-testing, clear window background).
+  hit-testing, clear window background), up to 8192 points per window (A8).
 - Sprite coordinates come from `skinspec/sprites.json` via the generated Swift table. Never hand-type
   a coordinate in Swift that exists in the JSON.
 - **Rendering**: each window is a borderless `NSWindow` with one flipped custom `NSView`. Draw in

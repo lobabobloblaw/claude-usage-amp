@@ -105,8 +105,11 @@ public final class TokenampController: NSObject {
         skinLoadError = loaded.error
         heroIndex = prefs.heroIndex
         visualizerMode = prefs.visualizerMode
-        // A `--skin` that loaded is remembered, but only once it has drawn (`start`).
-        skinPathToRemember = loaded.error == nil ? skinOverride : nil
+        // A `--skin` that loaded is remembered, but only once it has drawn (`start`) - and a path
+        // as an absolute one, or a launch from Finder (working directory `/`) could not find it.
+        skinPathToRemember = loaded.error == nil
+            ? skinOverride.map { Arguments.rememberedSkinSpec($0, currentDirectory: FileManager.default.currentDirectoryPath) }
+            : nil
         super.init()
     }
 
@@ -143,29 +146,44 @@ public final class TokenampController: NSObject {
         docking.field = field.window
         docking.scale = scale
         docking.onDragEnd = { [weak self] in
-            guard let self, self.scaleReconcilePending else { return }
-            self.reconcileScaleWithCurrentScreen()
+            guard let self else { return }
+            if self.scaleReconcilePending { self.reconcileScaleWithCurrentScreen() }
+            // The drag may have changed the screen room under Sessions, or what is docked below
+            // it (SPEC 2.4, amendment A7).
+            self.playlist.refit()
         }
         for window in [mainWindow.window, equalizer.window, playlist.window, field.window] as [SkinWindow] {
             window.raiseWithGroup = { [weak self] clicked in self?.raiseWindowGroup(frontmost: clicked) }
         }
+        // Window > Main Window, the Dock icon and coming back to the app all bring the main window
+        // to the front; one on a display that has gone is brought back first (SPEC 2.7).
+        mainWindow.window.willMakeKeyAndOrderFront = { [weak self] _ in self?.bringMainBackIfLost() }
         // Coming back to the app by any route (a click, the Dock, Cmd-Tab) raises the whole stack.
         activationObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main) { [weak self] _ in
             self?.raiseWindowGroup(frontmost: NSApp.keyWindow as? SkinWindow)
         }
 
-        // Also applies the stored shade state, before anything is shown.
+        // The whole layout is settled before anything is shown, and saved only once it is final:
+        // the stored corners and shade state, then what is on no screen or has no place of its own
+        // yet, then the scale the main window's screen needs, then the main window's group kept
+        // inside that screen (SPEC 2.7, 2.8). The windows about to open count as open meanwhile.
+        isRestoringLayout = true
         restoreWindowPositions()
-        // The stored corner may put the main window on a screen with a different backing factor
-        // than the one we guessed from; honour that screen without touching the preference.
-        reconcileScaleWithCurrentScreen()
+        docking.opening = [mainWindow.window]
+            + [(equalizer.window, prefs.eqOpen), (playlist.window, prefs.playlistOpen), (field.window, prefs.fieldOpen)]
+                .filter { $0.1 }.map { $0.0 }
+        bringLayoutOnScreen()
+        docking.opening = []
+        isRestoringLayout = false
         applyAlwaysOnTop()
 
         mainWindow.window.makeKeyAndOrderFront(nil)
         if prefs.eqOpen { equalizer.show() }
         if prefs.playlistOpen { playlist.show() }
         if prefs.fieldOpen { field.show() }
+        // Auto-fit only once everything is on screen, so what is docked below Sessions follows it.
+        playlist.refit()
         if let path = skinPathToRemember {
             drawVisibleWindowsNow()
             prefs.skinPath = path
@@ -462,7 +480,7 @@ public final class TokenampController: NSObject {
     }
 
     public func toggleEqualizer() {
-        if equalizer.window.isVisible {
+        if isShowing(equalizer.window) {
             equalizer.hide()
         } else {
             placeForOpening(equalizer.window, .equalizer)
@@ -475,7 +493,7 @@ public final class TokenampController: NSObject {
 
     /// Clutterbar **V** and Windows > Token Flow.
     public func toggleField() {
-        if field.isVisible {
+        if isShowing(field.window) {
             field.hide()
         } else {
             // Place it before it is shown, or a first open flashes at the origin and then jumps.
@@ -492,13 +510,25 @@ public final class TokenampController: NSObject {
     /// A window with no stored corner goes to the foot of the column when it is opened, rather
     /// than appearing on top of whatever is already there. So does one whose stored place is on
     /// no screen any more (it was parked on a display that has since been unplugged), or it
-    /// would open where nobody can see it.
+    /// would open where nobody can see it. The foot of the column may be past the bottom of the
+    /// screen, so the main window's group is then kept on screen (SPEC 2.8) - all before the
+    /// window is shown, so it never flashes somewhere else first.
     private func placeForOpening(_ window: SkinWindow, _ key: Preferences.WindowKey) {
-        let screens = NSScreen.screens.map { $0.visibleFrame }
         guard WindowLayout.needsPlacementOnOpen(isPlaced: prefs.topLeft(key) != nil,
-                                                frame: window.frame, screens: screens) else { return }
+                                                frame: window.skinFrame, screens: visibleScreenFrames) else { return }
+        docking.opening = [window]
+        defer { docking.opening = [] }
         docking.placeBelowColumn(window)
+        docking.keepGroupOnScreen()
     }
+
+    /// Open and on a screen. A window left open on a display that has since gone is not: choosing
+    /// it from the Windows menu brings it back to the foot of the column instead of closing it.
+    private func isShowing(_ window: SkinWindow) -> Bool {
+        window.isVisible && WindowLayout.isReachable(window.skinFrame, screens: visibleScreenFrames)
+    }
+
+    private var visibleScreenFrames: [CGRect] { NSScreen.screens.map { $0.visibleFrame } }
 
     /// Flow per session id for the connectome, 0...1.
     func sessionFlows(now: Date) -> [String: Double] {
@@ -511,11 +541,13 @@ public final class TokenampController: NSObject {
     }
 
     public func togglePlaylist() {
-        if playlist.window.isVisible {
+        if isShowing(playlist.window) {
             playlist.hide()
         } else {
             placeForOpening(playlist.window, .playlist)
             playlist.show()
+            // The sessions may have changed while it was hidden (SPEC 2.4, amendment A7).
+            playlist.refit()
         }
         prefs.playlistOpen = playlist.window.isVisible
         saveWindowPositions()
@@ -606,7 +638,12 @@ public final class TokenampController: NSObject {
         playlist.applyScale(points)
         field.applyScale(points)
         docking.relayoutDocked(from: before)
-        clampOnScreen()
+        // A stack that now runs past the screen's visible frame moves back onto it as one (SPEC
+        // 2.8) - before auto-fit measures the room under Sessions, so Sessions keeps the room the
+        // move bought it rather than shrinking first.
+        docking.keepGroupOnScreen()
+        // The screen room in skin pixels changed with the scale, and with it auto-fit's cap.
+        playlist.refit()
         saveWindowPositions()
     }
 
@@ -792,10 +829,9 @@ public final class TokenampController: NSObject {
 
     /// Positions are stored as top-left corners (`WindowLayout`): every resize keeps a window's
     /// top-left fixed, so a corner saved from the 14-px shade strip, a short Sessions window or
-    /// another scale still puts the window back exactly where it was.
+    /// another scale still puts the window back exactly where it was. Runs inside
+    /// `isRestoringLayout`, before anything is shown.
     private func restoreWindowPositions() {
-        isRestoringLayout = true
-        defer { isRestoringLayout = false }
         // Everything starts in the default column; stored corners then override it window by
         // window. A window with no corner (the equalizer starts closed and may never have been
         // opened) keeps its default slot.
@@ -809,10 +845,9 @@ public final class TokenampController: NSObject {
             if let f = prefs.topLeft(.field) { field.window.setTopLeft(f) }
         }
         // Shade keeps the top-left corner, so it can follow the placement. It must come before
-        // the on-screen check, which has to judge the strip, not the full-height window. Nothing
+        // the on-screen checks, which have to judge the strip, not the full-height window. Nothing
         // is visible yet, so it moves no other window and saves nothing.
         if prefs.shadeMode { mainWindow.setShade(true, persist: false) }
-        clampOnScreen()
     }
 
     public func saveWindowPositions() {
@@ -830,36 +865,61 @@ public final class TokenampController: NSObject {
         }
     }
 
-    /// Put the layout back on a screen if a display was unplugged or rearranged since it was
-    /// saved. The decision is `WindowLayout.rescue`; this only gathers the facts.
+    /// Settle the layout on the screens there are (SPEC 2.7, 2.8): bring back what is on no
+    /// screen, use the scale the main window's screen needs, and keep the main window's docked
+    /// group inside that screen. At launch, and when the main window is found on no screen.
+    private func bringLayoutOnScreen() {
+        bringLostWindowsBack()
+        // The stored corner, or the rescue, may put the main window on a screen with a different
+        // backing factor than the one we guessed from; honour that screen without touching the
+        // preference. A scale change keeps the group on screen itself.
+        reconcileScaleWithCurrentScreen()
+        docking.keepGroupOnScreen()
+    }
+
+    /// Window > Main Window, the Dock icon and every other route that brings the main window to
+    /// the front: a main window on no screen (its display was unplugged while the app ran) is
+    /// brought back first, with its docked group, rather than raised where nobody can see it.
+    private func bringMainBackIfLost() {
+        guard !isRestoringLayout, let mainWindow,
+              !WindowLayout.isReachable(mainWindow.window.skinFrame, screens: visibleScreenFrames) else { return }
+        bringLayoutOnScreen()
+        playlist.refit()
+        saveWindowPositions()
+    }
+
+    /// Put back on a screen what is on none - a display was unplugged or rearranged since the
+    /// layout was saved - and give every open window that has no place of its own one at the foot
+    /// of the user's column, not the default column's slot (SPEC 2.7). The decision is
+    /// `WindowLayout.rescue`; this only gathers the facts and moves the windows.
     ///
-    /// It runs before any window is shown, so what is open comes from the preferences, not from
-    /// `isVisible`: the equalizer counts only when it will open (its default slot is on the
-    /// built-in screen and would otherwise make a lost stack look reachable), and Token Flow counts
-    /// - and moves with the group - when it will.
-    private func clampOnScreen() {
+    /// At launch nothing is shown yet, so what is open is what is about to be (`docking.isOpen`):
+    /// the equalizer counts only when it will open (its default slot is on the built-in screen),
+    /// and Token Flow is placed - and travels with the group - when it will.
+    private func bringLostWindowsBack() {
         guard let mainWindow, let equalizer, let playlist, let field else { return }
-        func placed(_ w: SkinWindow, _ key: Preferences.WindowKey) -> Bool {
-            w.isVisible || prefs.topLeft(key) != nil
-        }
-        // Without a placed main window everything is in the default column: nothing to rescue.
-        guard placed(mainWindow.window, .main) else { return }
-        let windows: [SkinWindow] = [mainWindow.window, equalizer.window, playlist.window, field.window]
-        let slots = [
-            WindowLayout.Slot(frame: mainWindow.window.frame, isOpen: true, isPlaced: true),
-            WindowLayout.Slot(frame: equalizer.window.frame, isOpen: prefs.eqOpen,
-                              isPlaced: placed(equalizer.window, .equalizer)),
-            WindowLayout.Slot(frame: playlist.window.frame, isOpen: prefs.playlistOpen,
-                              isPlaced: placed(playlist.window, .playlist)),
-            WindowLayout.Slot(frame: field.window.frame, isOpen: prefs.fieldOpen,
-                              isPlaced: placed(field.window, .field)),
+        // In column order, so windows put at the foot of the column line up the way the default
+        // column runs: Sessions, then Token Flow, then the equalizer.
+        let windows: [(window: SkinWindow, key: Preferences.WindowKey)] = [
+            (mainWindow.window, .main), (playlist.window, .playlist), (field.window, .field),
+            (equalizer.window, .equalizer),
         ]
-        let screens = NSScreen.screens.map { $0.visibleFrame }
+        let slots = windows.map { w, key in
+            WindowLayout.Slot(frame: w.skinFrame, isOpen: docking.isOpen(w),
+                              isPlaced: w.isVisible || prefs.topLeft(key) != nil)
+        }
         guard let home = (NSScreen.main ?? NSScreen.screens.first)?.visibleFrame,
-              let rescue = WindowLayout.rescue(slots, screens: screens, home: home) else { return }
+              let rescue = WindowLayout.rescue(slots, screens: visibleScreenFrames, home: home) else { return }
         for i in rescue.moves {
-            let w = windows[i]
-            w.setFrameOrigin(CGPoint(x: w.frame.minX + rescue.offset.dx, y: w.frame.minY + rescue.offset.dy))
+            let w = windows[i].window
+            w.setTopLeft(CGPoint(x: w.topLeft.x + rescue.offset.dx, y: w.topLeft.y + rescue.offset.dy))
+        }
+        // One at a time; those still waiting sit in the default column or on no screen, and must
+        // not count as the foot of the column.
+        var waiting = rescue.strays.map { windows[$0].window }
+        while !waiting.isEmpty {
+            let w = waiting.removeFirst()
+            docking.placeBelowColumn(w, ignoring: waiting)
         }
     }
 

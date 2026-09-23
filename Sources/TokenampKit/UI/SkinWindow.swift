@@ -22,6 +22,11 @@ public final class SkinWindow: NSWindow {
     /// Token Flow behind other apps while the faceplate came forward; Winamp raised the group.
     public var raiseWithGroup: ((SkinWindow) -> Void)?
 
+    /// Runs just before the window is made key and brought to the front - by Window > Main Window,
+    /// the Dock icon or a click - so the controller can first bring a window that is on no screen
+    /// back onto one (SPEC 2.7). Bringing it to the front where nobody can see it does nothing.
+    public var willMakeKeyAndOrderFront: ((SkinWindow) -> Void)?
+
     public init(skinSize: SkinPair, scale: Double, title: String) {
         self.skinSize = skinSize
         pointsScale = scale
@@ -37,6 +42,11 @@ public final class SkinWindow: NSWindow {
         collectionBehavior = [.managed, .participatesInCycle, .fullScreenAuxiliary]
         animationBehavior = .none
         tabbingMode = .disallowed
+    }
+
+    public override func makeKeyAndOrderFront(_ sender: Any?) {
+        willMakeKeyAndOrderFront?(self)
+        super.makeKeyAndOrderFront(sender)
     }
 
     /// Resize around the top-left corner, which is how a Winamp window grows downwards. Because

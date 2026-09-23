@@ -44,6 +44,11 @@ if [[ -f "assets/Tokenamp.icns" ]]; then
     echo "    icon: assets/Tokenamp.icns"
 fi
 
+# Document types: .wsz only, through an *imported* type declaration. Tokenamp does not define the
+# classic Winamp skin format, so it imports the type (an app that exports one takes precedence)
+# and names it in its own namespace, since the format has no registered identifier. It conforms to
+# public.zip-archive, so Finder still knows it is a zip. Claiming com.pkware.zip-archive made
+# LaunchServices ignore the extension list: Tokenamp was offered for every .zip, never for .wsz.
 cat > "$CONTENTS/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -82,18 +87,35 @@ ${ICON_LINE}
 	<array>
 		<dict>
 			<key>CFBundleTypeName</key>
-			<string>Winamp Skin</string>
+			<string>Winamp Classic Skin</string>
 			<key>CFBundleTypeRole</key>
 			<string>Viewer</string>
+			<key>LSHandlerRank</key>
+			<string>Default</string>
 			<key>LSItemContentTypes</key>
 			<array>
-				<string>com.pkware.zip-archive</string>
+				<string>local.tokenamp.wsz</string>
 			</array>
-			<key>CFBundleTypeExtensions</key>
+		</dict>
+	</array>
+	<key>UTImportedTypeDeclarations</key>
+	<array>
+		<dict>
+			<key>UTTypeIdentifier</key>
+			<string>local.tokenamp.wsz</string>
+			<key>UTTypeDescription</key>
+			<string>Winamp Classic Skin</string>
+			<key>UTTypeConformsTo</key>
 			<array>
-				<string>wsz</string>
-				<string>zip</string>
+				<string>public.zip-archive</string>
 			</array>
+			<key>UTTypeTagSpecification</key>
+			<dict>
+				<key>public.filename-extension</key>
+				<array>
+					<string>wsz</string>
+				</array>
+			</dict>
 		</dict>
 	</array>
 </dict>
@@ -114,7 +136,12 @@ fi
 
 echo "==> ad-hoc signing"
 codesign --force --deep -s - "$APP"
-codesign --verify --deep --strict "$APP" && echo "    signature ok"
+# Not `verify && echo`: a failing command on the left of && does not trip `set -e`.
+if ! codesign --verify --deep --strict "$APP"; then
+    echo "error: signature verification failed for $APP" >&2
+    exit 1
+fi
+echo "    signature ok"
 
 echo
 echo "built $APP"

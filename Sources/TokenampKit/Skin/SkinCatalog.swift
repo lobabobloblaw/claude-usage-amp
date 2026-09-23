@@ -56,6 +56,17 @@ public enum SkinCatalog {
         return Skin.base
     }
 
+    public enum InstallError: Swift.Error, CustomStringConvertible {
+        case containsSkinsFolder(String)
+
+        public var description: String {
+            switch self {
+            case .containsSkinsFolder(let name):
+                return "\(name) holds the skins folder itself - pick the skin's own folder"
+            }
+        }
+    }
+
     /// Load a dropped `.wsz`/`.zip`/folder and copy it into the user skins folder so it survives
     /// relaunches (SPEC 2.6).
     ///
@@ -65,10 +76,17 @@ public enum SkinCatalog {
     /// wrong on the way, the staging copy is removed and the original URL is returned, which still
     /// loads.
     ///
+    /// What is copied is bounded (amendment A8): a folder that is, or holds, the skins folder is
+    /// refused outright (copying it into itself recursed dozens of levels deep on the main
+    /// thread); of any other folder only the top-level files the loader reads are copied, each
+    /// within its own limit; an archive over `SkinLoader.maximumArchiveBytes` is used where it is
+    /// and not copied.
+    ///
     /// - Returns: the loaded skin and the URL to remember for it: the installed copy, or the
     ///   original when it could not be copied.
     public static func install(_ url: URL,
                                into dir: URL = ResourceLocator.ensureUserSkinsDirectory()) throws -> (skin: Skin, url: URL) {
+        if folder(url, contains: dir) { throw InstallError.containsSkinsFolder(url.lastPathComponent) }
         let skin = try SkinLoader.load(url: url)
         let fm = FileManager.default
         let dest = dir.appendingPathComponent(url.lastPathComponent)
@@ -76,7 +94,17 @@ public enum SkinCatalog {
         let staging = dir.appendingPathComponent(".installing-\(UUID().uuidString)-\(url.lastPathComponent)")
         defer { try? fm.removeItem(at: staging) }
         do {
-            try fm.copyItem(at: url, to: staging)
+            var isDir: ObjCBool = false
+            if fm.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue {
+                try fm.createDirectory(at: staging, withIntermediateDirectories: false)
+                for file in SkinLoader.folderMembers(url) where file.size <= file.member.byteLimit {
+                    try fm.copyItem(at: file.url, to: staging.appendingPathComponent(file.url.lastPathComponent))
+                }
+            } else {
+                let size = (try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize) ?? Int.max
+                guard size <= SkinLoader.maximumArchiveBytes else { return (skin, url) }
+                try fm.copyItem(at: url, to: staging)
+            }
             if fm.fileExists(atPath: dest.path) {
                 _ = try fm.replaceItemAt(dest, withItemAt: staging)
             } else {
@@ -88,11 +116,27 @@ public enum SkinCatalog {
         }
     }
 
-    /// True for the file types the app accepts by drag-and-drop or the Load Skin panel.
+    /// True when `inner` is `outer` or lies anywhere below it. Compared by file identity, walking
+    /// up from `inner`'s real path, so symlinks, `/private` aliases and letter case cannot hide it.
+    static func folder(_ outer: URL, contains inner: URL) -> Bool {
+        let key: Set<URLResourceKey> = [.fileResourceIdentifierKey]
+        guard let target = try? outer.resolvingSymlinksInPath().resourceValues(forKeys: key).fileResourceIdentifier
+        else { return false }
+        var dir = inner.resolvingSymlinksInPath().standardizedFileURL
+        for _ in 0..<dir.pathComponents.count {
+            if let id = try? dir.resourceValues(forKeys: key).fileResourceIdentifier, id.isEqual(target) { return true }
+            dir = dir.deletingLastPathComponent()
+        }
+        return false
+    }
+
+    /// True for the file types the app accepts by drag-and-drop or the Load Skin panel: a `.wsz`
+    /// or `.zip` (SPEC 3), or a folder with a sheet of its own at the top (amendment A8), so that
+    /// a folder of skins, the Skins folder or a home folder is turned away at the door.
     public static func isSkinURL(_ url: URL) -> Bool {
         var isDir: ObjCBool = false
         guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir) else { return false }
-        if isDir.boolValue { return true }
+        if isDir.boolValue { return SkinLoader.isSkinFolder(url) }
         return ["wsz", "zip"].contains(url.pathExtension.lowercased())
     }
 }

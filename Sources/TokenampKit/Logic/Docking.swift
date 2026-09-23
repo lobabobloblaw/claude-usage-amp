@@ -89,6 +89,35 @@ public enum Docking {
         return group
     }
 
+    // MARK: - Following a window that changes height (SPEC 2.4, amendment A7)
+
+    /// The windows docked below `anchor`, by index into `frames` (art rectangles): those hanging
+    /// under its bottom edge, and transitively whatever is docked to them - under them or beside
+    /// them - as long as it lies wholly below that edge too. They are what has to move when the
+    /// anchor grows or shrinks around its top-left; left behind, the column would open a gap or run
+    /// into itself.
+    ///
+    /// A window whose top is above the anchor's bottom edge is anchored higher up - the main window
+    /// over Sessions, a window docked beside it, a second column hanging from the main window - and
+    /// is not reached, even when something in the second column happens to reach lower down.
+    public static func dockedBelow(_ anchor: CGRect, frames: [CGRect], tolerance: CGFloat = 1.0) -> Set<Int> {
+        let candidates = frames.indices.filter { frames[$0].maxY <= anchor.minY + tolerance }
+        let group = dockedGroup(anchor: anchor, frames: candidates.map { frames[$0] }, tolerance: tolerance)
+        return Set(group.map { candidates[$0] })
+    }
+
+    /// How far, in whole points, the windows docked below a window move when its bottom art edge
+    /// moves from `oldBottom` to `newBottom` (its top-left staying put).
+    ///
+    /// Window origins are whole points (A6), and a window hanging under a half-point edge sits
+    /// rounded up into it. Moving the column by the difference of the two edges *so rounded* keeps
+    /// that: what hung flush or one device pixel into the old edge hangs flush or one device pixel
+    /// into the new one, never a gap, and never an overlap that grows step by step. One offset for
+    /// the whole group, so the windows below keep their places relative to one another exactly.
+    public static func followingShift(from oldBottom: CGFloat, to newBottom: CGFloat) -> CGFloat {
+        newBottom.rounded(.up) - oldBottom.rounded(.up)
+    }
+
     /// Default stacked layout: main at `mainOrigin` (top-left in screen coords), EQ directly
     /// under it, playlist under the EQ (SPEC 2.7). Returns bottom-left origins for AppKit.
     /// Stack windows into a flush column from a top-left corner, given their skin-pixel heights

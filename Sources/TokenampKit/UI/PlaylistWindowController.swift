@@ -2,7 +2,8 @@ import AppKit
 import Foundation
 
 /// The resizable "Sessions" window (SPEC 2.4): wheel and handle scrolling, row selection,
-/// double-click opens the session's cwd, vertical resize in 29 px steps via the bottom-right grip.
+/// double-click opens the session's cwd, vertical resize in 29 px steps via the bottom-right grip,
+/// or auto-fit to the sessions it lists (amendment A7). Windows docked below it follow its height.
 public final class PlaylistWindowController: NSObject, SkinViewDelegate, NSWindowDelegate {
 
     unowned let app: TokenampController
@@ -48,15 +49,37 @@ public final class PlaylistWindowController: NSObject, SkinViewDelegate, NSWindo
     func hide() { window.orderOut(nil) }
 
     /// A new skin can bring a different `plfont` row pitch, so the visible-row count - and with it
-    /// the scroll clamp - changes with the skin.
+    /// the scroll clamp, and the height auto-fit wants - changes with the skin.
     func skinChanged() {
+        refit()
         clampScroll()
         view.needsDisplay = true
     }
 
-    /// Every publish: the list may have shrunk, re-sorted or lost the selected session.
+    /// Every publish: the list may have grown, shrunk, re-sorted or lost the selected session.
     func dataChanged() {
+        refit()
         if list.reconcile(ids: rowIDs, visibleRows: visibleRows) { view.needsDisplay = true }
+    }
+
+    /// Auto-fit (SPEC 2.4, amendment A7): with "Fit to Sessions" on, the window is as tall as its
+    /// sessions need and no taller (`PlaylistFit`), capped so that it and the windows docked below
+    /// it stay inside its screen's visible frame; past the cap the list scrolls. Never in the
+    /// middle of a window drag or a grip resize, this window's or Token Flow's - the drag's end and
+    /// Token Flow's grip release call back in, and this window's grip turns auto-fit off - and
+    /// never while hidden, when nothing on screen could follow it. While the transcripts are still
+    /// being scanned the list is incomplete, so the window may grow but not shrink: a launch would
+    /// otherwise drop to the minimum and climb back as the scan lands.
+    func refit() {
+        guard app.prefs.playlistAutoFit, window.isVisible, !resizing, !app.docking.isDragging,
+              !(app.field?.isResizing ?? false) else { return }
+        let cap = app.docking.maxSkinHeight(of: window) ?? .max
+        let fitted = PlaylistFit.height(count: app.snapshot.sessionsToday.count, rowHeight: rowHeight,
+                                        maxHeight: cap)
+        if app.snapshot.localStatus.isScanning, fitted < skinHeight, skinHeight <= PlaylistFit.largestHeight(atMost: cap) {
+            return
+        }
+        setSkinHeight(fitted)
     }
 
     /// The bottom-right countdown ticks once a second; nothing else in the window does.
@@ -75,15 +98,20 @@ public final class PlaylistWindowController: NSObject, SkinViewDelegate, NSWindo
         view.needsDisplay = true
     }
 
+    /// Every height change, from the grip or from auto-fit. The top-left stays put (A6), so the
+    /// bottom edge moves, and whatever is docked below it moves with it: captured before the
+    /// resize, shifted after it, and saved like any other move.
     private func setSkinHeight(_ h: Int) {
         let snapped = PlaylistRenderer.snapHeight(h)
         guard snapped != app.prefs.playlistHeight else { return }
         app.prefs.playlistHeight = snapped
+        let below = app.docking.captureBelow(window)
         window.setSkinSize(SkinPair(skinWidth, snapped), scale: app.scale)
         view.frame = NSRect(origin: .zero, size: window.frame.size)
         view.regions = PlaylistRenderer.regions(width: skinWidth, height: snapped)
         clampScroll()
         view.needsDisplay = true
+        if app.docking.follow(below, heightChangeOf: window) { app.saveWindowPositions() }
     }
 
     private var rowHeight: Int { app.skin.playlistRowHeight }
@@ -138,6 +166,9 @@ public final class PlaylistWindowController: NSObject, SkinViewDelegate, NSWindo
 
     public func skinView(_ view: SkinView, didDrag id: ControlID, to point: CGPoint) {
         if resizing {
+            // Taking the grip takes the height over: auto-fit stays off until the menu turns it
+            // back on (A7).
+            if app.prefs.playlistAutoFit { app.prefs.playlistAutoFit = false }
             // The window's top-left is fixed, so dragging down grows it (screen y grows up).
             let delta = resizeStartMouseY - NSEvent.mouseLocation.y
             setSkinHeight(resizeStartHeight + Int((delta / CGFloat(app.scale)).rounded()))
@@ -179,6 +210,11 @@ public final class PlaylistWindowController: NSObject, SkinViewDelegate, NSWindo
             item.state = app.prefs.playlistShowsCost == cost ? .on : .off
             menu.addItem(item)
         }
+        menu.addItem(.separator())
+        let fit = NSMenuItem(title: "Fit to Sessions", action: #selector(toggleAutoFit), keyEquivalent: "")
+        fit.target = self
+        fit.state = app.prefs.playlistAutoFit ? .on : .off
+        menu.addItem(fit)
         menu.addItem(.separator())
         let reveal = NSMenuItem(title: "Reveal Selected in Finder", action: #selector(revealSelected), keyEquivalent: "")
         reveal.target = self
@@ -225,6 +261,12 @@ public final class PlaylistWindowController: NSObject, SkinViewDelegate, NSWindo
 
     @objc private func revealSelected() {
         if let selection { openRow(selection) }
+    }
+
+    /// Turning auto-fit on fits at once; turning it off leaves the window at the height it has.
+    @objc private func toggleAutoFit() {
+        app.prefs.playlistAutoFit.toggle()
+        refit()
     }
 
     // MARK: - NSWindowDelegate

@@ -15,6 +15,8 @@ extension SelfTest {
         legacyMigration(c)
         storedFormat(c, tmp: tmp)
         offScreenRescue(c)
+        // Placement on the screens there are: SelfTest+Placement.swift.
+        windowPlacement(c)
     }
 
     // MARK: - A launch, step for step
@@ -285,24 +287,33 @@ extension SelfTest {
                     Slot(frame: onScreen[2], isOpen: true, isPlaced: true)]
         c.check("nothing off screen: no move", WindowLayout.rescue(fine, screens: [builtIn], home: home) == nil)
 
-        // Partly off screen is the user's choice.
+        // Another open window still reachable no longer vetoes the rescue: the main window used to
+        // stay on the unplugged display on every launch. It moves with what is docked to it and
+        // nothing else; the lost Token Flow, docked to nothing that moves, goes to the foot of the
+        // column, and the reachable Sessions stays where the user put it.
         var partly = reported
         partly[2] = Slot(frame: onScreen[1], isOpen: true, isPlaced: true)
-        c.check("one open window still reachable: no move",
-                WindowLayout.rescue(partly, screens: [builtIn], home: home) == nil)
+        let partlyRescue = WindowLayout.rescue(partly, screens: [builtIn], home: home)
+        c.equal("main lost, Sessions still reachable: the main window is rescued alone", partlyRescue?.moves, [0])
+        c.equal("... and the lost Token Flow goes to the foot of the column", partlyRescue?.strays, [3])
 
         // Missing corners: a window with no stored corner sits in the default column on a live
-        // screen; it must not veto the rescue, and it is not dragged along.
+        // screen; it must not veto the rescue, and it is not dragged along - it goes to the foot
+        // of the column instead (SPEC 2.7).
         var missing = reported
         missing[3] = Slot(frame: onScreen[2], isOpen: true, isPlaced: false)
         c.equal("Token Flow never stored: main and Sessions still rescued",
                 WindowLayout.rescue(missing, screens: [builtIn], home: home)?.moves, [0, 2])
+        c.equal("Token Flow never stored: it goes to the foot of the column",
+                WindowLayout.rescue(missing, screens: [builtIn], home: home)?.strays, [3])
         let mainOnly = [Slot(frame: main, isOpen: true, isPlaced: true),
                         Slot(frame: eqDefault, isOpen: false, isPlaced: false),
                         Slot(frame: onScreen[1], isOpen: true, isPlaced: false),
                         Slot(frame: onScreen[2], isOpen: true, isPlaced: false)]
         c.equal("only main stored: main alone is rescued",
                 WindowLayout.rescue(mainOnly, screens: [builtIn], home: home)?.moves, [0])
+        c.equal("only main stored: the open windows go to the foot of its column, in order",
+                WindowLayout.rescue(mainOnly, screens: [builtIn], home: home)?.strays, [2, 3])
         let nothingStored = mainOnly.map { Slot(frame: $0.frame, isOpen: $0.isOpen, isPlaced: false) }
         c.check("nothing stored: nothing to rescue",
                 WindowLayout.rescue(nothingStored, screens: [builtIn], home: home) == nil)

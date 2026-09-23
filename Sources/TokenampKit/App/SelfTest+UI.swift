@@ -5,9 +5,10 @@ import UsageModel
 
 /// Regression checks for a batch of UI defects: the hero track lost on every live launch, limit
 /// alerts that repeated, the scale a trip to another display left behind, skin images whose
-/// headers claim gigabytes, the Sessions list's scroll and selection, and the one-device-pixel
-/// docking seam at a fractional scale. Pure logic and files in the scratch folder only; no window
-/// is created.
+/// headers claim gigabytes, the Sessions list's scroll and selection, the one-device-pixel
+/// docking seam at a fractional scale, and Sessions auto-fit with the windows docked below it
+/// following its height (A7). Pure logic and files in the scratch folder only; no window is
+/// created.
 extension SelfTest {
 
     static func uiFixes(_ c: Checker, tmp: URL) {
@@ -18,6 +19,8 @@ extension SelfTest {
         skinInstall(c, tmp: tmp)
         sessionsListState(c)
         dockingOnTheArt(c)
+        sessionsAutoFit(c)
+        dockedBelowFollowsHeight(c)
     }
 
     private static func gauge(_ id: String, _ kind: LimitGauge.Kind, _ percent: Double,
@@ -477,5 +480,157 @@ extension SelfTest {
         let started: [CGPoint?] = [WindowLayout.topLeft(of: sl2), WindowLayout.topLeft(of: tf2),
                                    WindowLayout.topLeft(of: eq2)]
         c.equal("and back at 2x, everything is exactly where it started", [back[0], back[1], back[2]], started)
+    }
+
+    // MARK: - 8. Sessions auto-fit (SPEC 2.4, amendment A7)
+
+    private static func sessionsAutoFit(_ c: Checker) {
+        c.section("Sessions auto-fit: the smallest valid height that shows every session (A7)")
+        let minH = Layout.Playlist.minSize.h
+        let step = Layout.Playlist.resizeStep.h
+        c.equal("no sessions: the minimum height", PlaylistFit.height(count: 0, rowHeight: 13), minH)
+        c.equal("four rows fit the minimum", PlaylistFit.height(count: 4, rowHeight: 13), minH)
+        c.equal("a fifth takes one step", PlaylistFit.height(count: 5, rowHeight: 13), minH + step)
+        c.equal("thirteen fit the old default", PlaylistFit.height(count: 13, rowHeight: 13),
+                Layout.Playlist.defaultSize.h)
+        c.equal("one more than fits takes the next step", PlaylistFit.height(count: 14, rowHeight: 13),
+                Layout.Playlist.defaultSize.h + step)
+        // 435 px has a 377 px list: exactly 29 rows of 13, no strip under the last one.
+        c.equal("an exact multiple: 29 rows fill 435 px to the pixel", PlaylistFit.height(count: 29, rowHeight: 13), 435)
+        c.equal("and the thirtieth row needs the next step", PlaylistFit.height(count: 30, rowHeight: 13), 464)
+        // The skin's plfont sets the pitch (SPEC 3.2): Walnut 76 draws 12 px rows.
+        c.equal("8 sessions at a 12 px pitch", PlaylistFit.height(count: 8, rowHeight: 12), 174)
+        c.equal("15 sessions at an 11 px pitch fit the old default", PlaylistFit.height(count: 15, rowHeight: 11), 232)
+        c.equal("3 sessions at a 20 px pitch", PlaylistFit.height(count: 3, rowHeight: 20), minH + step)
+        c.equal("a nonsense pitch cannot divide by zero", PlaylistFit.height(count: 3, rowHeight: 0), minH)
+        c.equal("a negative count is no sessions", PlaylistFit.height(count: -2, rowHeight: 13), minH)
+
+        // The cap: the largest valid height within it, never below the minimum.
+        c.equal("a cap between steps rounds down to a step", PlaylistFit.height(count: 30, rowHeight: 13, maxHeight: 300), 290)
+        c.equal("a cap on a step is that step", PlaylistFit.height(count: 30, rowHeight: 13, maxHeight: 290), 290)
+        c.equal("a cap above the fit changes nothing", PlaylistFit.height(count: 8, rowHeight: 12, maxHeight: 1_000), 174)
+        c.equal("a cap below the minimum still gets the minimum",
+                PlaylistFit.height(count: 30, rowHeight: 13, maxHeight: 50), minH)
+        c.equal("so does a negative cap (the column is already off screen)",
+                PlaylistFit.height(count: 30, rowHeight: 13, maxHeight: -400), minH)
+
+        // Against the renderer's own arithmetic, for every count and pitch in a wide range: the
+        // fit is a height the grip could produce, it shows every row, and one step less does not.
+        var agrees = true
+        for rowHeight in 6...24 {
+            for count in 0...60 {
+                let h = PlaylistFit.height(count: count, rowHeight: rowHeight)
+                let shows = PlaylistRenderer.visibleRows(height: h, rowHeight: rowHeight) >= count
+                let smallest = h == minH || PlaylistRenderer.visibleRows(height: h - step, rowHeight: rowHeight) < count
+                if PlaylistRenderer.snapHeight(h) != h || !shows || !smallest { agrees = false }
+            }
+        }
+        c.check("agrees with snapHeight and visibleRows for 0...60 rows at 6...24 px", agrees)
+
+        // The screen cap, on art rectangles (SPEC 2.8). Sessions hangs from y = 1000.
+        let screen = CGRect(x: 0, y: 0, width: 1_920, height: 1_200)
+        let sl2 = art(CGPoint(x: 100, y: 1_000), Layout.Playlist.defaultSize, 2)
+        c.equal("alone, it may reach the bottom of the screen",
+                PlaylistFit.maxHeight(art: sl2, below: [], screen: screen, scale: 2), 500)
+        c.equal("the Dock's edge is the bottom",
+                PlaylistFit.maxHeight(art: sl2, below: [], screen: CGRect(x: 0, y: 70, width: 1_920, height: 1_130),
+                                      scale: 2), 465)
+        let tf2 = art(CGPoint(x: 100, y: sl2.minY), Layout.Field.defaultSize, 2)
+        let cap2 = PlaylistFit.maxHeight(art: sl2, below: [tf2], screen: screen, scale: 2)
+        c.equal("Token Flow hanging under it takes its 464 pt off the room", cap2, 268)
+        c.equal("so 30 sessions stop at the step below the cap",
+                PlaylistFit.height(count: 30, rowHeight: 13, maxHeight: cap2), 261)
+
+        // At 1.5x the answer is exact, not a point short: Token Flow hangs rounded up into a
+        // half-point edge, and at 435 px it lands with its bottom exactly on the screen's.
+        let sessions261 = SkinPair(Layout.Playlist.defaultSize.w, 261)
+        let column = Docking.column(topLeft: CGPoint(x: 100, y: 1_000), scale: 1.5,
+                                    skinSizes: [sessions261, Layout.Field.defaultSize])
+        let sl15 = art(column[0], sessions261, 1.5)
+        let tf15 = art(column[1], Layout.Field.defaultSize, 1.5)
+        let cap15 = PlaylistFit.maxHeight(art: sl15, below: [tf15], screen: screen, scale: 1.5)
+        c.equal("at 1.5x the cap is 435 px", cap15, 435)
+        let grown = art(column[0], SkinPair(Layout.Playlist.defaultSize.w, cap15), 1.5)
+        c.equal("and there Token Flow's bottom is exactly on the screen's",
+                tf15.minY + Docking.followingShift(from: sl15.minY, to: grown.minY), screen.minY)
+        let over = art(column[0], SkinPair(Layout.Playlist.defaultSize.w, cap15 + 1), 1.5)
+        c.check("one pixel more would push it off",
+                tf15.minY + Docking.followingShift(from: sl15.minY, to: over.minY) < screen.minY)
+        let lowScreen = CGRect(x: 0, y: 700, width: 1_920, height: 500)
+        c.equal("a column already hanging off the screen caps below the minimum, and gets the minimum",
+                PlaylistFit.height(count: 8, rowHeight: 13,
+                                   maxHeight: PlaylistFit.maxHeight(art: sl2, below: [tf2], screen: lowScreen, scale: 2)),
+                minH)
+    }
+
+    // MARK: - 9. The windows docked below Sessions follow its height (A7)
+
+    private static func dockedBelowFollowsHeight(_ c: Checker) {
+        c.section("docking: what is docked below Sessions follows its height, and nothing else moves (A7)")
+        let top = CGPoint(x: 100, y: 1_000)
+        let mainArt = art(top, Layout.Main.size, 2)
+        let sl = art(CGPoint(x: 100, y: mainArt.minY), Layout.Playlist.defaultSize, 2)
+        let tf = art(CGPoint(x: 100, y: sl.minY), Layout.Field.defaultSize, 2)
+        let eqUnder = art(CGPoint(x: 100, y: tf.minY), Layout.EQ.size, 2)
+        let besideTF = art(CGPoint(x: tf.maxX, y: tf.maxY), Layout.EQ.size, 2)
+        let besideSessions = art(CGPoint(x: sl.maxX, y: sl.maxY), Layout.EQ.size, 2)
+        let parked = art(CGPoint(x: 1_500, y: 300), Layout.EQ.size, 2)
+
+        let frames = [mainArt, tf, eqUnder, besideTF, besideSessions, parked]
+        let below = Docking.dockedBelow(sl, frames: frames)
+        c.equal("the column under it, and what is docked beside that, follow", below, [1, 2, 3])
+        c.check("the main window above it stays", !below.contains(0))
+        c.check("a window beside it stays", !below.contains(4))
+        c.check("a parked window stays", !below.contains(5))
+        c.check("with nothing under it, nothing follows",
+                Docking.dockedBelow(sl, frames: [mainArt, besideSessions, parked]).isEmpty)
+
+        // A second column docked at the main window's side: a tall Token Flow beside both, and the
+        // equalizer under it lying wholly below Sessions' bottom edge. It hangs from Token Flow,
+        // which does not move, not from Sessions.
+        let colB = art(CGPoint(x: mainArt.maxX, y: mainArt.maxY), SkinPair(Layout.Field.defaultSize.w, 377), 2)
+        let colBFoot = art(CGPoint(x: colB.minX, y: colB.minY), Layout.EQ.size, 2)
+        c.check("(the second column's foot is lower than Sessions' bottom)", colBFoot.maxY < sl.minY)
+        c.check("a second column hanging from the main window stays",
+                Docking.dockedBelow(sl, frames: [mainArt, colB, colBFoot]).isEmpty)
+        // Sessions at the top of a column: the main window docked under it is below it.
+        let slTop = art(top, Layout.Playlist.defaultSize, 2)
+        let mainUnder = art(CGPoint(x: 100, y: slTop.minY), Layout.Main.size, 2)
+        c.equal("a main window hanging under Sessions follows it", Docking.dockedBelow(slTop, frames: [mainUnder]), [0])
+
+        // The shift: whole points, the bottom edge rounded up either side (A6).
+        c.equal("2x, one step taller: down 58 pt", Docking.followingShift(from: 536, to: 478), -58)
+        c.equal("2x, one step shorter: up 58 pt", Docking.followingShift(from: 478, to: 536), 58)
+        c.equal("1.5x onto a whole point: down 44 pt, flush", Docking.followingShift(from: 608.5, to: 565), -44)
+        c.equal("1.5x onto a half point: up 44 pt, one device pixel into it",
+                Docking.followingShift(from: 565, to: 608.5), 44)
+        c.equal("no height change, no move", Docking.followingShift(from: 608.5, to: 608.5), 0)
+
+        // Walk Sessions through a run of heights at 1.5x with Token Flow and the equalizer hanging
+        // under it: at every step Token Flow touches Sessions or overlaps it by one device pixel at
+        // most, never gaps; the equalizer keeps its place under Token Flow; the main window above
+        // never moves. Back at the first height, everything is exactly where it started.
+        let sizes = [Layout.Main.size, SkinPair(Layout.Playlist.defaultSize.w, 261), Layout.Field.defaultSize,
+                     Layout.EQ.size]
+        let corners = Docking.column(topLeft: CGPoint(x: 40, y: 1_040), scale: 1.5, skinSizes: sizes)
+        let fixedMain = art(corners[0], sizes[0], 1.5)
+        var slArt = art(corners[1], sizes[1], 1.5)
+        var others = [fixedMain, art(corners[2], sizes[2], 1.5), art(corners[3], sizes[3], 1.5)]
+        let started = others
+        var flush = true
+        var together = true
+        for h in [290, 319, 232, 116, 145, 435, 261] {
+            let now = art(corners[1], SkinPair(Layout.Playlist.defaultSize.w, h), 1.5)
+            let shift = Docking.followingShift(from: slArt.minY, to: now.minY)
+            for i in Docking.dockedBelow(slArt, frames: others) { others[i] = others[i].offsetBy(dx: 0, dy: shift) }
+            slArt = now
+            let overlap = others[1].maxY - slArt.minY
+            if overlap < 0 || overlap > 0.5 || shift != shift.rounded() { flush = false }
+            if others[2].maxY - others[1].minY != started[2].maxY - started[1].minY { together = false }
+        }
+        c.check("every step: flush or one device pixel of overlap, by whole points", flush)
+        c.check("Token Flow and the equalizer move as one", together)
+        c.equal("the main window never moved", others[0], fixedMain)
+        c.equal("back at 261 px, everything is where it started", others, started)
     }
 }

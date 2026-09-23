@@ -29,10 +29,10 @@ public struct ZipArchive {
         }
     }
 
-    /// The largest member we are willing to allocate for. The biggest sheet a classic skin can
-    /// legitimately carry is eqmain.bmp at 275x315x4 bytes; 64 MiB is four orders of magnitude of
-    /// head-room and still bounds what a hostile archive can make us allocate by *declaring* a
-    /// four-gigabyte uncompressed size in its central directory.
+    /// The largest member this reader will allocate for when the caller names no tighter bound: it
+    /// stops a hostile archive from making us allocate by *declaring* a four-gigabyte uncompressed
+    /// size in its central directory. The skin loader passes a much smaller per-kind bound
+    /// (`SkinLoader.byteLimit`), so a skin member never comes near this.
     public static let maximumMemberBytes = 64 << 20
 
     public struct Entry {
@@ -42,7 +42,8 @@ public struct ZipArchive {
         public let compressedSize: Int
         public let uncompressedSize: Int
         public let localHeaderOffset: Int
-        public var isDirectory: Bool { name.hasSuffix("/") }
+        /// `\` too: PowerShell 5's Compress-Archive writes Windows separators.
+        public var isDirectory: Bool { name.hasSuffix("/") || name.hasSuffix("\\") }
         public var isEncrypted: Bool { flags & 0x0001 != 0 }
     }
 
@@ -124,6 +125,20 @@ public struct ZipArchive {
     // MARK: - Extraction
 
     public func extract(_ entry: Entry) throws -> Data {
+        try extract(entry, limit: ZipArchive.maximumMemberBytes)
+    }
+
+    /// Extract one member, refused before a byte of it is copied or inflated if it could come out
+    /// larger than `limit`. The central directory's declared size is attacker-controlled and
+    /// decides how big a buffer we allocate, so it must fit; so must a stored member's payload,
+    /// which is copied as is. A deflate stream is inflated into a buffer of exactly the declared
+    /// size, so one that would inflate to more than it declared stops there instead of growing.
+    public func extract(_ entry: Entry, limit: Int) throws -> Data {
+        guard entry.uncompressedSize <= limit else { throw Error.tooLarge(entry.name, entry.uncompressedSize) }
+        if entry.method == 0, entry.compressedSize > limit {
+            throw Error.tooLarge(entry.name, entry.compressedSize)
+        }
+
         // The local header repeats the name/extra lengths; its sizes may be zero when a data
         // descriptor follows, so always trust the central directory's sizes.
         let lh = entry.localHeaderOffset
@@ -136,18 +151,14 @@ public struct ZipArchive {
         guard start + entry.compressedSize <= data.count else {
             throw Error.truncated("payload for \(entry.name)")
         }
-        let payload = data.slice(start, entry.compressedSize)
 
         switch entry.method {
         case 0:
-            return payload
+            return data.slice(start, entry.compressedSize)
         case 8:
             if entry.uncompressedSize == 0 { return Data() }
-            // The declared size is attacker-controlled: it decides how big a buffer we allocate.
-            guard entry.uncompressedSize <= ZipArchive.maximumMemberBytes else {
-                throw Error.tooLarge(entry.name, entry.uncompressedSize)
-            }
-            guard let out = ZipArchive.inflate(payload, expected: entry.uncompressedSize) else {
+            // Inflated straight out of the (memory-mapped) archive: no copy of the compressed bytes.
+            guard let out = ZipArchive.inflate(data.view(start, entry.compressedSize), expected: entry.uncompressedSize) else {
                 throw Error.decompressionFailed(entry.name)
             }
             return out
@@ -204,9 +215,14 @@ private extension Data {
     }
 
     func slice(_ offset: Int, _ length: Int) -> Data {
+        Data(view(offset, length))
+    }
+
+    /// The same bytes as `slice`, sharing this buffer instead of copying it.
+    func view(_ offset: Int, _ length: Int) -> Data {
         guard offset >= 0, length > 0, offset + length <= count else { return Data() }
         let a = index(startIndex, offsetBy: offset)
         let b = index(a, offsetBy: length)
-        return Data(self[a..<b])
+        return self[a..<b]
     }
 }

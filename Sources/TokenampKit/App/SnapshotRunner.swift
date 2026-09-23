@@ -22,7 +22,8 @@ public enum SnapshotRunner {
         let dir = URL(fileURLWithPath: (directory as NSString).expandingTildeInPath, isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
 
-        var state = makeState(snapshot: snapshot, scale: scale, now: now)
+        var state = makeState(snapshot: snapshot, scale: scale, now: now,
+                              playlistRowHeight: skin.playlistRowHeight)
         if stateName?.lowercased() == "pressed" {
             // Exercise the alternate sprites: play held down, EQ toggle held, volume thumb grabbed.
             state.pressed = [.play, .eqToggle, .volume, .eqOn, .plScroll, .clutter("D")]
@@ -90,8 +91,11 @@ public enum SnapshotRunner {
         return Result(files: files, warnings: skin.warnings, skinName: skin.name)
     }
 
-    /// The deterministic view state a snapshot renders: settled visualizer, marquee at the start.
-    public static func makeState(snapshot: UsageSnapshot, scale: Int, now: Date) -> ViewState {
+    /// The deterministic view state a snapshot renders: settled visualizer, marquee at the start,
+    /// and the Sessions window at the height auto-fit gives this data at the skin's row pitch
+    /// (SPEC 2.4, amendment A7) - uncapped, as there is no screen offscreen.
+    public static func makeState(snapshot: UsageSnapshot, scale: Int, now: Date,
+                                 playlistRowHeight: Int = Layout.Playlist.rowHeight) -> ViewState {
         var state = ViewState()
         state.now = now
         state.scale = Double(scale)
@@ -115,7 +119,8 @@ public enum SnapshotRunner {
                                             isStopped: false, now: now)
         state.marqueeOffset = 0
         state.playlistWidth = Layout.Playlist.defaultSize.w
-        state.playlistHeight = Layout.Playlist.defaultSize.h
+        state.playlistHeight = PlaylistFit.height(count: snapshot.sessionsToday.count,
+                                                  rowHeight: playlistRowHeight)
         state.playlistScroll = 0
         state.playlistShowsCost = true
         state.eqRange = .hours

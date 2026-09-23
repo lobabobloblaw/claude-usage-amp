@@ -28,6 +28,7 @@ public final class Preferences {
             K.pollInterval: 60.0,
             K.playlistShowsCost: true,
             K.playlistHeight: Layout.Playlist.defaultSize.h,
+            K.playlistAutoFit: true,
             K.fieldOpen: true,
             K.fieldMode: FieldMode.scope.rawValue,
             K.fieldAuto: true,
@@ -78,6 +79,7 @@ public final class Preferences {
         static let pollInterval = "pollInterval"
         static let playlistShowsCost = "playlistShowsCost"
         static let playlistHeight = "playlistHeight"
+        static let playlistAutoFit = "playlistAutoFit"
         static let liveEnabled = "liveEnabled"
         static let demoData = "demoData"
         static let menuBarReadout = "menuBarReadout"
@@ -169,9 +171,18 @@ public final class Preferences {
         set { defaults.set(newValue, forKey: K.alwaysOnTop) }
     }
 
+    /// The Sessions window's height in skin pixels. Auto-fit writes it too, so turning auto-fit off
+    /// leaves the window at the height it had, and a launch creates it there.
     public var playlistHeight: Int {
         get { max(Layout.Playlist.minSize.h, defaults.integer(forKey: K.playlistHeight)) }
         set { defaults.set(newValue, forKey: K.playlistHeight) }
+    }
+
+    /// "Fit to Sessions" (SPEC 2.4, amendment A7): the Sessions window sizes itself to the sessions
+    /// it lists. On by default; dragging the resize grip turns it off.
+    public var playlistAutoFit: Bool {
+        get { defaults.bool(forKey: K.playlistAutoFit) }
+        set { defaults.set(newValue, forKey: K.playlistAutoFit) }
     }
 
     /// A window's stored top-left corner, in screen points. Every resize keeps a window's top-left

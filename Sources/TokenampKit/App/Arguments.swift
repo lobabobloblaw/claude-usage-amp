@@ -63,4 +63,22 @@ public struct Arguments {
 
     /// The clock a demo run should use.
     public var demoClock: Date { at ?? DemoUsageProvider.referenceDate }
+
+    /// How a `--skin` that loaded is remembered as the stored skin (SPEC 2.6). A path is stored
+    /// absolute and standardized: a relative one (`skins/dist/X.wsz`) resolves against the working
+    /// directory, and a later launch from Finder, whose working directory is `/`, would not find it
+    /// and would fall back to Base without a word. The name of a bundled or installed skin stays a
+    /// name. What counts as a path is what `SkinCatalog.url(for:)` loads as one: something that
+    /// exists at the tilde-expanded spec.
+    public static func rememberedSkinSpec(_ spec: String, currentDirectory: String,
+                                          fileExists: (String) -> Bool = { FileManager.default.fileExists(atPath: $0) })
+        -> String {
+        let expanded = (spec as NSString).expandingTildeInPath
+        guard fileExists(expanded) else { return spec }
+        let base = URL(fileURLWithPath: currentDirectory, isDirectory: true)
+        let url = expanded.hasPrefix("/") ? URL(fileURLWithPath: expanded)
+                                          : URL(fileURLWithPath: expanded, relativeTo: base)
+        // Lexically: `..` and `.` go, symbolic links stay as the user named them.
+        return url.absoluteURL.standardized.path
+    }
 }

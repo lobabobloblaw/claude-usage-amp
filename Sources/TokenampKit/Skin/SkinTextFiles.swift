@@ -216,8 +216,18 @@ public struct SkinRegion: Equatable {
 
 public struct SkinRegions {
     public private(set) var regions: [SkinRegionKind: SkinRegion] = [:]
+    /// Sections dropped for listing more than `maximumPoints` points (amendment A8).
+    public private(set) var oversized: [SkinRegionKind] = []
 
     public subscript(kind: SkinRegionKind) -> SkinRegion? { regions[kind] }
+
+    /// The most points one window's shape may list (amendment A8). The shape is a clip on every
+    /// redraw at 30 fps and a hit test on every click, both linear in its size: a region.txt of
+    /// millions of polygons made each frame a multi-million-point clip. A per-scanline trace of the
+    /// whole 275x116 main window, the densest shape a region editor writes, is about two thousand
+    /// points; 8192 is four times that and costs about 0.15 ms a redraw. A section with more is
+    /// dropped whole - that window stays rectangular - rather than cut into a wrong shape.
+    public static let maximumPoints = 8192
 
     public static func parse(_ data: Data) -> SkinRegions {
         var out = SkinRegions()
@@ -225,8 +235,9 @@ public struct SkinRegions {
         for kind in SkinRegionKind.allCases {
             let sec = ini.section(kind.rawValue)
             guard !sec.isEmpty else { continue }
-            let counts = ints(sec["numpoints"])
-            let coords = ints(sec["pointlist"])
+            // Never more numbers than a shape at the cap could use, plus one to tell it is over.
+            let counts = ints(sec["numpoints"], limit: maximumPoints + 1)
+            let coords = ints(sec["pointlist"], limit: 2 * (maximumPoints + 1))
             guard !counts.isEmpty, coords.count >= 2 else { continue }
             var polys: [[CGPoint]] = []
             var idx = 0
@@ -238,13 +249,19 @@ public struct SkinRegions {
                     idx += 2
                 }
                 if poly.count >= 3 { polys.append(poly) }
+                if idx / 2 > maximumPoints { break }
+            }
+            if idx / 2 > maximumPoints {
+                out.oversized.append(kind)
+                continue
             }
             if !polys.isEmpty { out.regions[kind] = SkinRegion(polygons: polys) }
         }
         return out
     }
 
-    private static func ints(_ s: String?) -> [Int] {
+    /// The integers in `s`, at most `limit` of them.
+    private static func ints(_ s: String?, limit: Int) -> [Int] {
         guard let s else { return [] }
         var out: [Int] = []
         var cur = ""
@@ -253,7 +270,10 @@ public struct SkinRegions {
             if ch.isNumber {
                 cur.append(ch)
             } else {
-                if !cur.isEmpty { out.append((negative ? -1 : 1) * (Int(cur) ?? 0)); cur = ""; negative = false }
+                if !cur.isEmpty {
+                    out.append((negative ? -1 : 1) * (Int(cur) ?? 0)); cur = ""; negative = false
+                    if out.count >= limit { return out }
+                }
                 negative = (ch == "-")
             }
         }

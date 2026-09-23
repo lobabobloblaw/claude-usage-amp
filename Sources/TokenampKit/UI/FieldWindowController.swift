@@ -26,6 +26,11 @@ public final class FieldWindowController: NSObject, SkinViewDelegate, NSWindowDe
 
     private var draggingStarted = false
     private var resizing = false
+    /// The bottom-right grip is being dragged. Sessions does not refit meanwhile (A7): its cap
+    /// depends on this window's height when it hangs below Sessions, and moving this window under
+    /// the pointer would throw the grip off. Also checks the button, like `DockingManager.isDragging`,
+    /// so a grip drag whose mouse-up never arrived cannot hold auto-fit back for good.
+    var isResizing: Bool { resizing && (NSEvent.pressedMouseButtons & 1) != 0 }
     private var resizeStartSize = SkinPair(0, 0)
     private var resizeStartMouse = CGPoint.zero
 
@@ -191,17 +196,22 @@ public final class FieldWindowController: NSObject, SkinViewDelegate, NSWindowDe
         settle()
     }
 
+    /// Every size change keeps the top-left fixed (A6), so the bottom edge moves, and whatever is
+    /// docked below this window moves with it - captured before the resize, shifted after it and
+    /// saved - exactly as under Sessions (SPEC 2.4, amendment A7).
     private func setSkinSize(_ w: Int, _ h: Int) {
         let sw = FieldRenderer.snapWidth(w), sh = FieldRenderer.snapHeight(h)
         guard sw != skinWidth || sh != skinHeight else { return }
         app.prefs.fieldWidth = sw
         app.prefs.fieldHeight = sh
+        let below = app.docking.captureBelow(window)
         window.setSkinSize(SkinPair(sw, sh), scale: app.scale)
         view.frame = NSRect(origin: .zero, size: window.frame.size)
         view.regions = FieldRenderer.regions(width: sw, height: sh)
         let well = FieldRenderer.canvasRect(width: sw, height: sh)
         field.resize(width: well.w, height: well.h)
         settle()
+        if app.docking.follow(below, heightChangeOf: window) { app.saveWindowPositions() }
     }
 
     // MARK: - SkinViewDelegate
@@ -236,7 +246,12 @@ public final class FieldWindowController: NSObject, SkinViewDelegate, NSWindowDe
     public func skinView(_ view: SkinView, didRelease id: ControlID, at point: CGPoint, inside: Bool) {
         let wasResizing = resizing
         resizing = false
-        if wasResizing { app.saveWindowPositions() }
+        if wasResizing {
+            // The room under Sessions changed when this window hangs below it: auto-fit catches up
+            // now that the grip is let go (A7), rather than at whichever publish comes next.
+            app.playlist.refit()
+            app.saveWindowPositions()
+        }
         guard inside else { return }
         switch id {
         case .fieldClose:

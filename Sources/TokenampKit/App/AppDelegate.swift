@@ -10,6 +10,8 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
     private let liveProviderAvailable: Bool
     private let providerDiagnostics: ((UsageProvider) -> [String])?
     public private(set) var controller: TokenampController?
+    /// A skin opened from Finder before the controller exists (see `application(_:open:)`).
+    private var launchSkins = PendingSkinOpen()
 
     public init(arguments: Arguments, providerFactory: @escaping (Bool) -> UsageProvider,
                 liveProviderAvailable: Bool,
@@ -37,6 +39,7 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         c.start()
         controller = c
+        if let url = launchSkins.takeQueued() { c.loadSkin(at: url, install: true) }
         NSApp.activate(ignoringOtherApps: true)
     }
 
@@ -51,8 +54,11 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
         return true
     }
 
+    /// A double-clicked `.wsz` that launches the app arrives here *before*
+    /// `applicationDidFinishLaunching`, while there is no controller yet; it waits and is applied
+    /// once the controller has started, instead of being dropped.
     public func application(_ application: NSApplication, open urls: [URL]) {
-        guard let url = urls.first(where: { SkinCatalog.isSkinURL($0) }) else { return }
+        guard let url = launchSkins.receive(urls, ready: controller != nil) else { return }
         controller?.loadSkin(at: url, install: true)
     }
 
@@ -101,5 +107,28 @@ public final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func showOptions() {
         controller?.mainWindow.showOptionsMenuUnderButton()
+    }
+}
+
+/// The skin a Finder open asks for, held until there is a controller to apply it. AppKit delivers
+/// launch documents before `applicationDidFinishLaunching`; the last one opened wins.
+struct PendingSkinOpen {
+    private(set) var queued: URL?
+
+    /// The skin among `urls` to apply now, or nil when there is none or it has been queued
+    /// because the app is not `ready` yet.
+    mutating func receive(_ urls: [URL], ready: Bool) -> URL? {
+        guard let url = urls.first(where: { SkinCatalog.isSkinURL($0) }) else { return nil }
+        guard ready else {
+            queued = url
+            return nil
+        }
+        return url
+    }
+
+    /// The queued skin, once; the queue is empty afterwards.
+    mutating func takeQueued() -> URL? {
+        defer { queued = nil }
+        return queued
     }
 }

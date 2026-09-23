@@ -1,9 +1,10 @@
 import CoreGraphics
 import Foundation
 
-/// Where the windows are kept between launches, and how a layout whose display went away is
-/// brought back (SPEC 2.6, 2.7). Pure geometry in **screen coordinates** (origin bottom-left,
-/// y up), so `--selftest` covers it without creating a window.
+/// Where the windows are kept between launches, how a layout whose display went away is brought
+/// back (SPEC 2.6, 2.7), and how the main window's docked group is kept on screen (SPEC 2.8).
+/// Pure geometry in **screen coordinates** (origin bottom-left, y up), so `--selftest` covers it
+/// without creating a window.
 ///
 /// Positions are persisted as **top-left corners**. Every size change the app makes - window
 /// shade, the Sessions height, a Token Flow resize, a scale change - keeps a window's top-left
@@ -99,6 +100,8 @@ public enum WindowLayout {
 
     /// One window as the rescue sees it.
     public struct Slot: Equatable {
+        /// Its art rectangle (`skinRect`); the window frame would do as well, as the checks allow a
+        /// point of slack.
         public var frame: CGRect
         /// On screen, or about to be: the main window always, the others per their open preference.
         public var isOpen: Bool
@@ -113,10 +116,22 @@ public enum WindowLayout {
         }
     }
 
-    /// Move the windows at `moves` (indices into the slots) by `offset`.
+    /// What the rescue does: move the windows at `moves` (indices into the slots) by `offset`,
+    /// then put each of `strays`, in that order, at the foot of the column (SPEC 2.7).
     public struct Rescue: Equatable {
+        /// Whole points. Zero when the main window is on a screen.
         public var offset: CGVector
+        /// The main window and its docked group, when the main window is on no screen; else empty.
         public var moves: [Int]
+        /// Open windows, other than the main one and not in `moves`, that have no place of their
+        /// own or whose place is on no screen.
+        public var strays: [Int]
+
+        public init(offset: CGVector, moves: [Int], strays: [Int] = []) {
+            self.offset = offset
+            self.moves = moves
+            self.strays = strays
+        }
     }
 
     /// How far inside the home screen's top-left corner a rescued main window lands - the same
@@ -129,36 +144,101 @@ public enum WindowLayout {
         screens.contains { $0.intersects(frame.insetBy(dx: -1, dy: -1)) }
     }
 
-    /// Decide whether the layout has to be brought back on screen, e.g. after the display it was
-    /// on was unplugged. Slot 0 is the main window.
+    /// Decide what has to be brought back on screen, e.g. after the display a window was on was
+    /// unplugged. Slot 0 is the main window; nil when nothing has to move.
     ///
-    /// - Only open windows with a user-given place vote. A closed window is not on screen, so it
-    ///   cannot make the layout reachable; a window with no stored corner sits in the default
-    ///   column the app just laid out on a live screen, so it proves nothing about the others.
-    /// - The app steps in only when *no* voter is reachable; a partly off-screen stack is the
-    ///   user's choice.
-    /// - Every voter moves by one shared offset, so windows docked together stay docked. The main
-    ///   window's top-left lands `rescueInset` inside `home`'s top-left.
-    /// - A closed window with a stored place travels with the group when it is off screen too, so
-    ///   it reopens where it belongs relative to the stack; one parked on a live screen stays put.
+    /// - Without a place of its own for the main window, every window is in the default column the
+    ///   app just laid out on a live screen: nothing to do.
+    /// - When the main window is on no screen it is rescued together with its docked group - the
+    ///   placed windows docked to it, transitively, in the stored layout - by one whole-point
+    ///   offset, so they stay docked; its top-left lands `rescueInset` inside `home`'s top-left.
+    ///   Whatever else is still on a screen stays where the user put it.
+    /// - A closed member of the group travels only when it is off screen too, so it reopens where
+    ///   it belongs relative to the stack; one parked on a live screen stays put.
+    /// - Every other open window with no place of its own, or with a place on no screen, is a
+    ///   stray: it goes to the foot of the column (`needsPlacementOnOpen`), in slot order. A closed
+    ///   one is dealt with when it is opened.
     public static func rescue(_ slots: [Slot], screens: [CGRect], home: CGRect) -> Rescue? {
-        let voters = slots.indices.filter { slots[$0].isOpen && slots[$0].isPlaced }
-        guard let firstVoter = voters.first else { return nil }
-        guard !voters.contains(where: { isReachable(slots[$0].frame, screens: screens) }) else { return nil }
+        guard let main = slots.first, main.isPlaced else { return nil }
 
-        let anchor = voters.contains(0) ? 0 : firstVoter
-        let from = topLeft(of: slots[anchor].frame)
-        let to = CGPoint(x: home.minX + rescueInset, y: home.maxY - rescueInset)
-        let moves = slots.indices.filter { i in
-            let s = slots[i]
-            guard s.isPlaced else { return false }
-            return s.isOpen || !isReachable(s.frame, screens: screens)
+        var offset = CGVector.zero
+        var moves: [Int] = []
+        if !isReachable(main.frame, screens: screens) {
+            let placed = slots.indices.dropFirst().filter { slots[$0].isPlaced }
+            let docked = Docking.dockedGroup(anchor: main.frame, frames: placed.map { slots[$0].frame })
+            moves = [0] + docked.map { placed[$0] }.sorted().filter { i in
+                slots[i].isOpen || !isReachable(slots[i].frame, screens: screens)
+            }
+            let from = topLeft(of: main.frame)
+            let to = CGPoint(x: home.minX + rescueInset, y: home.maxY - rescueInset)
+            offset = CGVector(dx: (to.x - from.x).rounded(), dy: (to.y - from.y).rounded())
         }
-        return Rescue(offset: CGVector(dx: to.x - from.x, dy: to.y - from.y), moves: moves)
+        let strays = slots.indices.dropFirst().filter { i in
+            slots[i].isOpen && !moves.contains(i)
+                && needsPlacementOnOpen(isPlaced: slots[i].isPlaced, frame: slots[i].frame, screens: screens)
+        }
+        guard !moves.isEmpty || !strays.isEmpty else { return nil }
+        return Rescue(offset: offset, moves: moves, strays: strays)
     }
 
-    /// Where a window goes when the user opens it: at the foot of the column (SPEC 2.7) when it
-    /// was never placed, and also when the place it has is on no screen any more.
+    // MARK: - Keeping the main window's group on screen (SPEC 2.8)
+
+    /// Is `rect` wholly inside the visible frames, give or take `tolerance` points at its edges?
+    /// It may span two displays: visible frames never overlap (displays tile the desktop), so the
+    /// areas they cover add up. The slack lets an art edge that whole-point rounding left half a
+    /// point past a screen edge (A6) count as on screen.
+    public static func isWhollyOnScreen(_ rect: CGRect, screens: [CGRect], tolerance: CGFloat = 1) -> Bool {
+        let inner = rect.insetBy(dx: tolerance, dy: tolerance)
+        guard !inner.isNull, inner.width > 0, inner.height > 0 else { return isReachable(rect, screens: screens) }
+        let covered = screens.reduce(CGFloat(0)) { sum, screen in
+            let part = screen.intersection(inner)
+            return part.isNull ? sum : sum + part.width * part.height
+        }
+        return covered >= inner.width * inner.height - 1e-6
+    }
+
+    /// The offset that brings the main window's docked group (`group`, its art rectangles) back
+    /// inside `home` - the visible frame of the main window's screen - as one unit, or nil when it
+    /// need not move (SPEC 2.8).
+    ///
+    /// - Nothing moves while every window of the group lies wholly on some screen, so a stack the
+    ///   user spread over two displays stays put.
+    /// - Otherwise the union of the group moves by the shortest distance that puts it inside
+    ///   `home`: up or left when it hangs off the bottom or the right, down or right when it hangs
+    ///   off the top or the left.
+    /// - A group taller than `home` keeps its top on screen, at the top of `home`; one wider than
+    ///   `home` keeps its left edge at the left of `home`. That is where the title bars are.
+    /// - The offset is in whole points, the same for every window, so docked windows keep their
+    ///   places relative to one another exactly and no seam can open between them (A6).
+    public static func onScreenShift(_ group: [CGRect], screens: [CGRect], home: CGRect,
+                                     tolerance: CGFloat = 1) -> CGVector? {
+        guard let first = group.first else { return nil }
+        guard !group.allSatisfy({ isWhollyOnScreen($0, screens: screens, tolerance: tolerance) }) else { return nil }
+        let union = group.dropFirst().reduce(first) { $0.union($1) }
+        let dx = axisShift(low: union.minX, high: union.maxX, screenLow: home.minX, screenHigh: home.maxX,
+                           keepHigh: false)
+        let dy = axisShift(low: union.minY, high: union.maxY, screenLow: home.minY, screenHigh: home.maxY,
+                           keepHigh: true)
+        return dx == 0 && dy == 0 ? nil : CGVector(dx: dx, dy: dy)
+    }
+
+    /// One axis of `onScreenShift`: the whole-point shift that puts `low...high` inside
+    /// `screenLow...screenHigh` by the shortest move. When it cannot fit, the edge that stays on
+    /// screen is `high` (`keepHigh`: the top) or `low` (the left).
+    static func axisShift(low: CGFloat, high: CGFloat, screenLow: CGFloat, screenHigh: CGFloat,
+                          keepHigh: Bool) -> CGFloat {
+        let least = screenLow - low      // any shift at least this keeps `low` on screen
+        let most = screenHigh - high     // any shift at most this keeps `high` on screen
+        let keep = keepHigh ? most.rounded(.down) : least.rounded(.up)
+        guard least <= most else { return keep }
+        if least <= 0, 0 <= most { return 0 }
+        let whole = least > 0 ? least.rounded(.up) : most.rounded(.down)
+        // Less than a point of room: no whole shift fits both edges, so keep the one that matters.
+        return whole >= least && whole <= most ? whole : keep
+    }
+
+    /// Where a window goes when it is opened, at launch or later: at the foot of the column
+    /// (SPEC 2.7) when it was never placed, and also when the place it has is on no screen any more.
     public static func needsPlacementOnOpen(isPlaced: Bool, frame: CGRect, screens: [CGRect]) -> Bool {
         !isPlaced || !isReachable(frame, screens: screens)
     }

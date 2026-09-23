@@ -35,8 +35,17 @@ public final class DockingManager {
 
     public init() {}
 
+    /// Windows about to be shown. The launch settles the layout before it orders anything in, so
+    /// nothing is visible yet; these count as open for every placement decision meanwhile.
+    public var opening: [SkinWindow] = []
+
+    /// On screen, or about to be (`opening`).
+    public func isOpen(_ window: SkinWindow) -> Bool {
+        window.isVisible || opening.contains { $0 === window }
+    }
+
     private var allWindows: [SkinWindow] {
-        [main, equalizer, playlist, field].compactMap { $0 }.filter { $0.isVisible }
+        [main, equalizer, playlist, field].compactMap { $0 }.filter { isOpen($0) }
     }
 
     private func screenFrame(for window: SkinWindow) -> CGRect? {
@@ -81,12 +90,6 @@ public final class DockingManager {
         return snapped
     }
 
-    /// Snap a window that is being placed (not dragged), e.g. after a scale change.
-    public func settle(_ window: SkinWindow) {
-        let others = allWindows.filter { $0 !== window }
-        window.setFrameOrigin(snappedOrigin(of: window, at: window.frame.origin, to: others))
-    }
-
     /// The window origin that snaps `window`'s art rectangle, were the window at `origin`, to the
     /// art rectangles of `others` and to the screen edges.
     private func snappedOrigin(of window: SkinWindow, at origin: CGPoint, to others: [SkinWindow]) -> CGPoint {
@@ -121,14 +124,77 @@ public final class DockingManager {
     }
 
     /// Where a window with no stored origin goes when it is opened: at the foot of whatever of the
-    /// column is on screen, so it never lands on top of another window.
-    public func placeBelowColumn(_ window: SkinWindow) {
-        let others = allWindows.filter { $0 !== window }.map { $0.skinFrame }
+    /// column is on screen, so it never lands on top of another window. `ignoring` are windows
+    /// still waiting for a place of their own, which must not count as the foot.
+    public func placeBelowColumn(_ window: SkinWindow, ignoring: [SkinWindow] = []) {
+        let others = allWindows.filter { w in w !== window && !ignoring.contains { $0 === w } }.map { $0.skinFrame }
         guard let lowest = others.min(by: { $0.minY < $1.minY }) else { return }
         let size = window.skinFrame.size
         let art = CGRect(x: lowest.minX, y: lowest.minY - size.height, width: size.width, height: size.height)
         window.setFrameOrigin(WindowLayout.wholePointOrigin(art: art, frameHeight: window.frame.height,
                                                             neighbours: others))
+    }
+
+    /// SPEC 2.8: move the main window and everything docked to it, as one unit and by whole
+    /// points, so the group lies inside the visible frame of the main window's screen
+    /// (`WindowLayout.onScreenShift`). Nothing moves while every window of the group lies wholly on
+    /// some screen. Windows not docked to the main window are left where the user put them.
+    /// Returns true when a window moved.
+    @discardableResult
+    public func keepGroupOnScreen() -> Bool {
+        guard let main, isOpen(main), let home = screenFrame(for: main) else { return false }
+        let others = allWindows.filter { $0 !== main }
+        let docked = Docking.dockedGroup(anchor: main.skinFrame, frames: others.map { $0.skinFrame })
+        let group = [main] + docked.sorted().map { others[$0] }
+        guard let shift = WindowLayout.onScreenShift(group.map { $0.skinFrame },
+                                                     screens: NSScreen.screens.map { $0.visibleFrame },
+                                                     home: home) else { return false }
+        for w in group {
+            w.setTopLeft(CGPoint(x: w.topLeft.x + shift.dx, y: w.topLeft.y + shift.dy))
+        }
+        return true
+    }
+
+    // MARK: - Following a Sessions or Token Flow height change (SPEC 2.4, amendment A7)
+
+    /// The windows docked below a window (`Docking.dockedBelow`), taken before it changes height.
+    public struct BelowGroup {
+        let bottom: CGFloat
+        let windows: [SkinWindow]
+    }
+
+    /// Record what is docked below `window`, so `follow` can move it after the resize. Whatever
+    /// only touches the window from above or beside it, or is not docked to it at all, is not in
+    /// the group and does not move.
+    public func captureBelow(_ window: SkinWindow) -> BelowGroup {
+        let art = window.skinFrame
+        guard window.isVisible else { return BelowGroup(bottom: art.minY, windows: []) }
+        let others = allWindows.filter { $0 !== window }
+        let below = Docking.dockedBelow(art, frames: others.map { $0.skinFrame })
+        return BelowGroup(bottom: art.minY, windows: below.sorted().map { others[$0] })
+    }
+
+    /// `window` changed height around its top-left: move everything that was docked below it by
+    /// as much as its bottom edge moved (`Docking.followingShift`), so the column stays flush.
+    /// Returns true when a window moved.
+    @discardableResult
+    public func follow(_ before: BelowGroup, heightChangeOf window: SkinWindow) -> Bool {
+        let shift = Docking.followingShift(from: before.bottom, to: window.skinFrame.minY)
+        guard shift != 0, !before.windows.isEmpty else { return false }
+        for w in before.windows {
+            w.setTopLeft(CGPoint(x: w.topLeft.x, y: w.topLeft.y + shift))
+        }
+        return true
+    }
+
+    /// The tallest `window` may grow, in skin pixels, with it and everything docked below it still
+    /// inside the visible frame of its screen (`PlaylistFit.maxHeight`).
+    public func maxSkinHeight(of window: SkinWindow) -> Int? {
+        guard let screen = screenFrame(for: window) else { return nil }
+        let art = window.skinFrame
+        let others = allWindows.filter { $0 !== window }.map { $0.skinFrame }
+        let below = Docking.dockedBelow(art, frames: others).map { others[$0] }
+        return PlaylistFit.maxHeight(art: art, below: below, screen: screen, scale: window.pointsScale)
     }
 
     // MARK: - Keeping a docked group together across a size or scale change
