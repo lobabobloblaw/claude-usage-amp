@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Tokenamp macOS app icon generator.
 
-Deterministic and re-runnable:
+Deterministic and re-runnable (needs only numpy and Pillow, not the app):
 
     python3 scripts/make_icon.py
 
@@ -11,15 +11,27 @@ Writes
     assets/Tokenamp.iconset/*.png
     assets/Tokenamp.icns        (via /usr/bin/iconutil)
 
-Design: a chunky front-on piece of retro hi-fi hardware in the macOS icon
-idiom.  Graphite squircle faceplate with a 2-step bevel and countersunk
-screws, a recessed near-black display holding a pixel-art spectrum
-analyzer, and an amber "T" token medallion at the lower right.
+Design: the player itself.  A miniature Tokenamp main window in the Walnut 76
+skin, hand-drawn as pixel art in the skin's own colours: wood title bar with
+the cream TOKENAMP plate and window keys, wood side rails, a black display
+with the countdown -02:47 in LCD digits (unlit segments ghosted), visualiser
+bars with red peaks and the SESSION / 43% / LIVE readout, the volume and
+balance sliders with EQ/PL keys, and the row of cream transport keys.  It sits
+on a deep-teal squircle tile on Apple's macOS grid (body 824/1024, drop shadow
+in the canvas margin, so Tahoe shows it as is) and casts a soft shadow.
+No gloss, no badge, no logos.
 
-The smooth parts (body, bevels, glare, shadows) are rendered at 3x and
-downsampled with LANCZOS.  The display contents are authored on a coarse
-pixel grid whose cells land exactly on final-image pixel boundaries, so
-they stay crisp.  16px and 32px use a separate simplified composition.
+The window is too wide (275x116) to be drawn honestly at icon sizes: it would
+land on whole pixels only at 512 and 1024, where it fills two thirds of the
+tile, and the Dock would swap compositions as it magnifies.  So every size
+shows the same drawing at a whole-pixel scale, filling ~83% of the tile width:
+    128 / 256 / 512 / 1024   the 86x46 sprite at 1x / 2x / 4x / 8x;
+    64    a 44x24 re-draw: plate, play mark, 2:47, bars, sliders, keys;
+    32    a 22x13 mark: title stripe with plate, 2:47, bars, key row;
+    16    a 10x7 mark: wood stripe with plate, display with bars, key strip.
+The tile is rendered smooth (supersampled, box-averaged); the sprite is
+pasted on top at an integer position with nearest-neighbour, so its pixels
+stay hard at every size.
 """
 
 from __future__ import annotations
@@ -38,8 +50,6 @@ ASSETS = os.path.join(ROOT, "assets")
 ICON_DIR = os.path.join(ASSETS, "icon")
 ICONSET = os.path.join(ASSETS, "Tokenamp.iconset")
 ICNS = os.path.join(ASSETS, "Tokenamp.icns")
-
-SS = 3  # supersample for the detailed 1024 render
 
 
 # --------------------------------------------------------------------------
@@ -93,11 +103,6 @@ def shift(a: np.ndarray, dy: int, dx: int, fill: float = 0.0) -> np.ndarray:
     return out
 
 
-def sstep(x: np.ndarray) -> np.ndarray:
-    x = np.clip(x, 0.0, 1.0)
-    return x * x * (3.0 - 2.0 * x)
-
-
 class Cv:
     """Straight-alpha RGBA canvas."""
 
@@ -117,21 +122,13 @@ class Cv:
         self.rgb = (num / np.maximum(out_a[..., None], 1e-6)).astype(np.float32)
         self.a = out_a.astype(np.float32)
 
-    def add(self, rgb: np.ndarray, w: np.ndarray) -> None:
-        """Additive light, only where the canvas is already opaque-ish."""
-        self.rgb = np.clip(self.rgb + rgb * w[..., None], 0.0, 1.0).astype(np.float32)
-
-    def mul(self, rgb: np.ndarray, w: np.ndarray) -> None:
-        f = 1.0 - w[..., None] * (1.0 - rgb)
-        self.rgb = np.clip(self.rgb * f, 0.0, 1.0).astype(np.float32)
-
-    def to_image(self, size: int, resample=Image.LANCZOS) -> Image.Image:
-        """Premultiplied downsample to `size`."""
+    def to_image(self, size: int) -> Image.Image:
+        """Premultiplied box downsample to `size` (exact k x k averages)."""
         pm = np.clip(self.rgb * self.a[..., None], 0.0, 1.0)
         arr = np.concatenate([pm, self.a[..., None]], axis=2)
         img = Image.fromarray((arr * 255.0 + 0.5).astype(np.uint8), "RGBA")
         if size != self.w:
-            img = img.resize((size, size), resample)
+            img = img.resize((size, size), Image.BOX)
         p = np.asarray(img).astype(np.float32) / 255.0
         al = p[..., 3:4]
         rgb = np.where(al > 1e-4, p[..., :3] / np.maximum(al, 1e-4), 0.0)
@@ -143,10 +140,6 @@ def grid(n: int):
     y, x = np.mgrid[0:n, 0:n].astype(np.float32)
     return x + 0.5, y + 0.5
 
-
-# --------------------------------------------------------------------------
-# shape fields
-# --------------------------------------------------------------------------
 
 def squircle(X, Y, cx, cy, a, n=5.0):
     """Returns (D, W): px distance inside the superellipse, and the
@@ -164,25 +157,9 @@ def squircle(X, Y, cx, cy, a, n=5.0):
     return D.astype(np.float32), W.astype(np.float32)
 
 
-def rbox(X, Y, x0, y0, x1, y1, rad):
-    """Signed distance to a rounded box; positive inside."""
-    cx, cy = (x0 + x1) * 0.5, (y0 + y1) * 0.5
-    hw, hh = (x1 - x0) * 0.5, (y1 - y0) * 0.5
-    qx = np.abs(X - cx) - (hw - rad)
-    qy = np.abs(Y - cy) - (hh - rad)
-    ax = np.maximum(qx, 0.0)
-    ay = np.maximum(qy, 0.0)
-    sd = np.sqrt(ax * ax + ay * ay) + np.minimum(np.maximum(qx, qy), 0.0) - rad
-    return (-sd).astype(np.float32)
-
-
 def cov(D: np.ndarray, aa: float) -> np.ndarray:
     """Antialiased coverage from a distance field (positive inside)."""
     return np.clip(D / aa + 0.5, 0.0, 1.0).astype(np.float32)
-
-
-def disc(X, Y, cx, cy, r):
-    return (r - np.sqrt((X - cx) ** 2 + (Y - cy) ** 2)).astype(np.float32)
 
 
 def rect_mask(X, Y, x0, y0, x1, y1, aa):
@@ -191,428 +168,429 @@ def rect_mask(X, Y, x0, y0, x1, y1, aa):
 
 
 # --------------------------------------------------------------------------
-# palette
+# the tile
 # --------------------------------------------------------------------------
 
-BODY_TOP = C("#3d434b")
-BODY_BOT = C("#16181c")
-SCREEN_TOP = C("#050b08")
-SCREEN_BOT = C("#0a1610")
-
-BAR_STOPS = [
-    (0.00, C("#10c93f")),
-    (0.30, C("#2ff055")),
-    (0.50, C("#7cf73e")),
-    (0.64, C("#f2e335")),
-    (0.80, C("#ff9614")),
-    (1.00, C("#ff2f14")),
-]
-CAP_COL = C("#eafff1")
-
-COIN_LIT = C("#ffd65e")
-COIN_MID = C("#ffa21f")
-COIN_DEEP = C("#e0640c")
-COIN_RIM_HI = C("#ffcf7c")
-COIN_RIM_LO = C("#772d02")
-T_DARK = C("#3a1505")
+TILE_TOP = C("#175a5c")
+TILE_BOT = C("#0a3033")
+BODY_A = 412.0 / 1024.0          # squircle half-size as a fraction of the canvas
 
 
-def bar_color(t: float) -> np.ndarray:
-    t = min(max(t, 0.0), 1.0)
-    for i in range(len(BAR_STOPS) - 1):
-        a, ca = BAR_STOPS[i]
-        b, cb = BAR_STOPS[i + 1]
-        if t <= b or i == len(BAR_STOPS) - 2:
-            u = 0.0 if b == a else (t - a) / (b - a)
-            u = min(max(u, 0.0), 1.0)
-            return ca * (1.0 - u) + cb * u
-    return BAR_STOPS[-1][1]
+def render_tile(S: int, player: tuple[int, int, int, int], ss: int) -> Image.Image:
+    """Shadowed teal squircle with a soft shadow under the player rect
+    (x0, y0, x1, y1 in final pixels).  Rendered at ss x and box-averaged."""
+    n = S * ss
+    X, Y = grid(n)
+    X = X / ss
+    Y = Y / ss                       # final-pixel space, sampled at ss
+    aa = 1.1 / ss
+    u = S / 1024.0                   # one 1024-space pixel in final pixels
+    k = float(ss)                    # final pixel -> sample
+    cv = Cv(n, n)
+    a = BODY_A * S
+    c = S / 2.0
+    D, W = squircle(X, Y, c, c, a, 5.0)
 
-
-# --------------------------------------------------------------------------
-# shared pieces
-# --------------------------------------------------------------------------
-
-def paint_body(cv, X, Y, cx, cy, a, aa, *, detail: bool, brush_seed: int = 7):
-    """Shadow + graphite squircle + 2-step bevel.  Returns (D, W, body_a)."""
-    n = 5.0
-    D, W = squircle(X, Y, cx, cy, a, n)
-
-    # ---- drop shadow ----------------------------------------------------
-    sh_off = a * 0.0305          # ~12.6px at 1024
-    sh_sig = a * 0.049           # ~20px
+    # drop shadow in the canvas margin, as on Apple's macOS icon grid
     sh = cov(D + a * 0.008, aa)
-    sh = shift(sh, int(round(sh_off)), 0)
-    sh = blur(sh, sh_sig)
+    sh = shift(sh, int(round(a * 0.0305 * k)), 0)
+    sh = blur(sh, a * 0.049 * k)
     cv.over(np.zeros(3, np.float32), np.clip(sh * 0.34, 0, 1))
-    # a tighter contact shadow
-    sh2 = blur(shift(cov(D, aa), int(round(a * 0.012)), 0), a * 0.013)
+    sh2 = blur(shift(cov(D, aa), int(round(a * 0.012 * k)), 0), a * 0.013 * k)
     cv.over(np.zeros(3, np.float32), np.clip(sh2 * 0.26, 0, 1))
 
-    body_a = cov(D, aa)
+    body = cov(D, aa)
+    t = np.clip((Y - (c - a)) / (2.0 * a), 0.0, 1.0)[..., None]
+    plate = TILE_TOP.reshape(1, 1, 3) * (1.0 - t) + TILE_BOT.reshape(1, 1, 3) * t
+    cv.over(plate.astype(np.float32), body)
 
-    # ---- plate -----------------------------------------------------------
-    t = np.clip((Y - (cy - a)) / (2.0 * a), 0.0, 1.0)[..., None]
-    plate = (BODY_TOP.reshape(1, 1, 3) * (1.0 - t) + BODY_BOT.reshape(1, 1, 3) * t)
-    # broad soft sheen sweeping from the top-left
-    sheen = sstep(1.0 - (((X - cx) / a) * 0.45 + ((Y - cy) / a) * 0.9 + 0.55))
-    plate = plate + (sheen * 0.032)[..., None]
+    # a hairline of light on the upper rim, a touch of dark on the lower one
+    edge = np.clip(1.0 - D / max(3.0 * u, 0.6), 0, 1) * body
+    cv.over(np.ones(3, np.float32), np.clip(edge * np.clip(W, 0, 1) * 0.16, 0, 1))
+    cv.over(np.zeros(3, np.float32), np.clip(edge * np.clip(-W, 0, 1) * 0.12, 0, 1))
 
-    if detail:
-        rng = np.random.default_rng(brush_seed)
-        h, w = X.shape
-        noise = rng.standard_normal((h, w)).astype(np.float32)
-        noise = _box1d(noise, max(1, int(a * 0.075)), 1)   # smear along x
-        noise = _box1d(noise, max(1, int(a * 0.0015)), 0)
-        noise /= (np.abs(noise).max() + 1e-6)
-        rows = rng.standard_normal((h, 1)).astype(np.float32)
-        rows = _box1d(rows, 2, 0)
-        rows /= (np.abs(rows).max() + 1e-6)
-        plate = plate + (noise * 0.030 + rows * 0.012)[..., None]
-
-    cv.over(np.clip(plate, 0, 1).astype(np.float32), body_a)
-
-    # ---- 2-step bevel ----------------------------------------------------
-    pos = np.clip(W, 0, 1)
-    neg = np.clip(-W, 0, 1)
-    if detail:
-        edge_w, lip_w, riser_c, riser_s = a * 0.0145, a * 0.041, a * 0.046, a * 0.0115
-        hi_s, lo_s = 0.45, 0.46
-    else:
-        edge_w, lip_w, riser_c, riser_s = a * 0.058, a * 0.11, 0.0, 0.0
-        hi_s, lo_s = 0.32, 0.34
-    # 1. crisp outer highlight right on the rim
-    edge = (np.clip(1.0 - D / edge_w, 0.0, 1.0) ** 1.15) * body_a
-    cv.over(np.ones(3, np.float32), np.clip(edge * pos * hi_s, 0, 1))
-    cv.over(np.zeros(3, np.float32), np.clip(edge * neg * lo_s, 0, 1))
-    # 2. the lip surface itself, a touch lighter than the face
-    lipm = np.clip(1.0 - D / lip_w, 0, 1) * body_a
-    cv.over(np.ones(3, np.float32), np.clip(lipm * 0.055, 0, 1))
-    # 3. the riser down to the face: inverted lighting reads as a step
-    if riser_s > 0:
-        riser = np.exp(-(((D - riser_c) / riser_s) ** 2)) * body_a
-        cv.over(np.zeros(3, np.float32), np.clip(riser * pos * 0.44, 0, 1))
-        cv.over(np.ones(3, np.float32), np.clip(riser * neg * 0.22, 0, 1))
-
-    return D, W, body_a
-
-
-def paint_recess(cv, X, Y, x0, y0, x1, y1, rad, aa, scale, top, bot):
-    """A window cut into the plate: dark interior, inner shadow, lit lower
-    rim.  Returns the interior mask."""
-    D = rbox(X, Y, x0, y0, x1, y1, rad)
-    m = cov(D, aa)
-
-    # outer groove: dark above-left, light below-right of the opening
-    ring = np.clip(1.0 - np.abs(D) / (scale * 0.009), 0, 1)
-    out = 1.0 - m
-    cv.over(np.zeros(3, np.float32), np.clip(ring * out * 0.55, 0, 1))
-    lit = shift(cov(D, aa), int(scale * 0.006), int(scale * 0.005))
-    cv.over(np.ones(3, np.float32),
-            np.clip(np.clip(1.0 - np.abs(rbox(X, Y, x0, y0, x1, y1, rad)) /
-                            (scale * 0.006), 0, 1) * (1.0 - lit) * 0.30, 0, 1))
-
-    # interior
-    t = np.clip((Y - y0) / max(y1 - y0, 1.0), 0, 1)[..., None]
-    inner = top.reshape(1, 1, 3) * (1.0 - t) + bot.reshape(1, 1, 3) * t
-    cv.over(np.clip(inner, 0, 1).astype(np.float32), m)
-
-    # inner shadow from the top-left
-    sh = blur(shift(1.0 - m, int(scale * 0.009), int(scale * 0.007)), scale * 0.011)
-    cv.over(np.zeros(3, np.float32), np.clip(sh * m * 0.85, 0, 1))
-    sh2 = blur(1.0 - m, scale * 0.020)
-    cv.over(np.zeros(3, np.float32), np.clip(sh2 * m * 0.45, 0, 1))
-    return m
-
-
-def paint_coin(cv, X, Y, cx, cy, r, aa, *, detail: bool, t_rects=None, rim=0.875):
-    """Amber token medallion with a bevelled rim and a slab T."""
-    d = disc(X, Y, cx, cy, r)
-    m = cov(d, aa)
-
-    # cast shadow
-    sh = blur(shift(cov(disc(X, Y, cx, cy, r * 1.02), aa),
-                    int(r * 0.10), int(r * 0.03)), r * 0.10)
-    cv.over(np.zeros(3, np.float32), np.clip(sh * 0.55, 0, 1))
-
-    dx = (X - cx) / r
-    dy = (Y - cy) / r
-    rr = np.sqrt(dx * dx + dy * dy) + 1e-9
-    w = -(dx + dy) / (rr * math.sqrt(2.0))          # +1 top-left
-
-    # rim
-    cv.over(np.clip(COIN_RIM_LO.reshape(1, 1, 3) +
-                    (COIN_RIM_HI - COIN_RIM_LO).reshape(1, 1, 3) *
-                    np.clip((w * 0.5 + 0.5), 0, 1)[..., None], 0, 1).astype(np.float32), m)
-
-    # face
-    fr = r * rim
-    fm = cov(disc(X, Y, cx, cy, fr), aa)
-    q = np.clip(np.sqrt(((X - cx) ** 2 + (Y - cy) ** 2)) / fr, 0, 1)
-    ramp = np.clip(0.5 - 0.5 * (dx * 0.80 + dy * 0.80), 0, 1) ** 0.85
-    face = (COIN_DEEP.reshape(1, 1, 3) * (1.0 - ramp[..., None]) +
-            COIN_LIT.reshape(1, 1, 3) * ramp[..., None])
-    face = face * (1.0 - 0.16 * (q ** 3)[..., None])
-    face = face + (COIN_MID.reshape(1, 1, 3) - face) * 0.18
-    cv.over(np.clip(face, 0, 1).astype(np.float32), fm)
-    # face inner shadow under the rim (top-left)
-    ish = blur(shift(1.0 - fm, int(r * 0.055), int(r * 0.045)), r * 0.05)
-    cv.over(np.zeros(3, np.float32), np.clip(ish * fm * 0.55, 0, 1))
-    ihl = blur(shift(1.0 - fm, -int(r * 0.05), -int(r * 0.04)), r * 0.05)
-    cv.over(np.ones(3, np.float32), np.clip(ihl * fm * 0.28, 0, 1))
-    # secondary catch-light on the lower-right of the rim (polished metal)
-    ring = np.clip(m - fm, 0, 1)
-    cv.over(np.ones(3, np.float32), np.clip(ring * (np.clip(-w, 0, 1) ** 2.8) * 0.22, 0, 1))
-    if detail:
-        gl = np.clip(1.0 - np.sqrt((X - (cx - r * 0.34)) ** 2 +
-                                   (Y - (cy - r * 0.40)) ** 2) / (r * 0.62), 0, 1) ** 2
-        cv.over(np.ones(3, np.float32), np.clip(gl * fm * 0.30, 0, 1))
-
-    # the T
-    if t_rects is None:
-        dd = 2.0 * r
-        t_rects = [
-            (cx - 0.310 * dd, cy - 0.255 * dd, cx + 0.310 * dd, cy - 0.085 * dd),
-            (cx - 0.105 * dd, cy - 0.085 * dd, cx + 0.105 * dd, cy + 0.258 * dd),
-        ]
-    tm = np.zeros_like(m)
-    for (a0, b0, a1, b1) in t_rects:
-        tm = np.maximum(tm, rect_mask(X, Y, a0, b0, a1, b1, aa))
-    off = max(1, int(round(r * 0.045)))
-    tlo = shift(tm, off, off)
-    cv.over(np.ones(3, np.float32), np.clip(np.clip(tlo - tm, 0, 1) * fm * 0.55, 0, 1))
-    cv.over(T_DARK, np.clip(tm * fm, 0, 1))
-    thi = shift(tm, -max(1, off // 2), -max(1, off // 2))
-    cv.over(np.zeros(3, np.float32),
-            np.clip(np.clip(thi - tm, 0, 1) * fm * 0.28, 0, 1))
-
-
-def fill(rgb_l, a_l, x0, y0, x1, y1, color, alpha=1.0):
-    """Hard-edged integer rectangle into a layer (pixel-art parts)."""
-    x0, y0, x1, y1 = int(x0), int(y0), int(x1), int(y1)
-    if x1 <= x0 or y1 <= y0:
-        return
-    rgb_l[y0:y1, x0:x1] = color
-    a_l[y0:y1, x0:x1] = alpha
-
-
-def draw_analyzer(rgb_l, a_l, k, x0, baseline, bw, gap, cell, rows,
-                  heights, caps, seg_gap, cap_h=None, cap_tint=0.45):
-    """Pixel-grid spectrum bars + floating peak caps."""
-    if cap_h is None:
-        cap_h = cell - seg_gap
-    for i, h in enumerate(heights):
-        bx = x0 + i * (bw + gap)
-        for row in range(h):
-            top = baseline - (row + 1) * cell
-            col = bar_color(row / max(rows - 1, 1))
-            fill(rgb_l, a_l, bx * k, (top + seg_gap) * k,
-                 (bx + bw) * k, (baseline - row * cell) * k, col)
-        cr = caps[i]
-        if cr is not None and cr >= h:
-            top = baseline - (cr + 1) * cell
-            col = (bar_color(cr / max(rows - 1, 1)) * cap_tint +
-                   CAP_COL * (1.0 - cap_tint))
-            fill(rgb_l, a_l, bx * k, (top + seg_gap) * k,
-                 (bx + bw) * k, (top + seg_gap + cap_h) * k, col)
+    # the player's shadow on the tile: a wide soft one and a tight contact one
+    x0, y0, x1, y1 = player
+    pm = rect_mask(X, Y, x0, y0, x1, y1, aa)
+    soft = blur(shift(pm, int(round(20 * u * k)), 0), max(22 * u * k, 1.0))
+    cv.over(np.zeros(3, np.float32), np.clip(soft * body * 0.50, 0, 1))
+    tight = blur(shift(pm, max(int(round(5 * u * k)), 1), 0), max(5 * u * k, 1.0))
+    cv.over(np.zeros(3, np.float32), np.clip(tight * body * 0.40, 0, 1))
+    return cv.to_image(S)
 
 
 # --------------------------------------------------------------------------
-# the detailed icon (64 px and up)
+# the player, drawn on its final pixel grid
 # --------------------------------------------------------------------------
 
-# 1024-space geometry
-BODY_C, BODY_A = 512.0, 412.0
-DX0, DY0, DX1, DY1 = 164, 210, 860, 776      # display opening
-BZ = 20                                       # bezel -> interior
-IX0, IY0, IX1, IY1 = DX0 + BZ, DY0 + BZ, DX1 - BZ, DY1 - BZ
-CELL = 24
-BAR_W, BAR_GAP = 48, 24
-BAR_X0, BAR_BASE, BAR_ROWS = 200, 672, 16
-SEG_GAP = 6
-HEIGHTS = [6, 12, 9, 14, 4, 11, 13, 7, 10]
-CAPS = [8, 14, 11, 15, 6, 13, 15, 9, 12]
-GRV_X0, GRV_X1, GRV_Y0, GRV_Y1 = 200, 824, 704, 728
-THUMB = (588, 690, 644, 742)
-COIN = (772.0, 724.0, 116.0)
-SCREW = 62.0
-VENT = [(196, y, 340, y + 13) for y in (818, 846, 874)]
+# Walnut 76 colours, sampled from the skin's render.
+PAL = {
+    "1": "#cc9867",   # wood, top highlight
+    "2": "#aa6e39",   # wood, light grain
+    "3": "#824c20",   # wood
+    "4": "#633416",   # wood, dark
+    "5": "#361d0c",   # wood, shadow
+    "P": "#fbf7ea",   # plate / key highlight
+    "p": "#ddd4bc",   # plate / faceplate cream
+    "q": "#b9af95",   # cream shade
+    "g": "#5d5546",   # cream, dark edge
+    "K": "#1b1812",   # ink
+    ".": "#050708",   # display black
+    "o": "#0a2224",   # unlit LCD segment
+    "t": "#0f5e60",   # dim teal
+    "m": "#1c9893",   # mid teal
+    "T": "#8af3e6",   # lit teal
+    "R": "#ff4a30",   # peak red
+    "A": "#ffb642",   # amber lamp
+    "D": "#2a2c2f",   # dark key
+    "e": "#8c8672",   # dark key legend
+}
+PAL_RGBA = {k: tuple(int(v[i:i + 2], 16) for i in (1, 3, 5)) + (255,)
+            for k, v in PAL.items()}
 
 
-def render_detailed(ss: int = SS) -> Cv:
-    n = 1024 * ss
-    X, Y = grid(n)
-    k = float(ss)
-    X = X / k
-    Y = Y / k                      # work in 1024-space, sample at ss
-    aa = 1.0 / k * 1.1
-    cv = Cv(n, n)
+class Px:
+    """A sprite drawn with palette keys on its exact pixel grid."""
 
-    D, W, body_a = paint_body(cv, X, Y, BODY_C, BODY_C, BODY_A, aa,
-                              detail=True)
+    def __init__(self, w: int, h: int, fill: str | None = None):
+        self.w, self.h = w, h
+        self.px = [[fill] * w for _ in range(h)]
 
-    # ---- screws ---------------------------------------------------------
-    lo, hi = 100.0 + SCREW, 924.0 - SCREW
-    for cx, cy, ang in ((lo, lo, 0.55), (hi, lo, -0.35),
-                        (lo, hi, -0.90), (hi, hi, 0.25)):
-        rh = 21.0
-        hole = cov(disc(X, Y, cx, cy, rh), aa)
-        dxs = (X - cx) / rh
-        dys = (Y - cy) / rh
-        rs = np.sqrt(dxs * dxs + dys * dys) + 1e-9
-        ws = -(dxs + dys) / (rs * math.sqrt(2.0))
-        cv.over(np.zeros(3, np.float32), np.clip(hole * 0.55, 0, 1))
-        ring = np.clip(rs, 0, 1) ** 2.0
-        cv.over(np.zeros(3, np.float32), np.clip(hole * ring * np.clip(ws, 0, 1) * 0.75, 0, 1))
-        cv.over(np.ones(3, np.float32), np.clip(hole * ring * np.clip(-ws, 0, 1) * 0.40, 0, 1))
-        hd = cov(disc(X, Y, cx, cy, rh * 0.70), aa)
-        tt = np.clip((Y - (cy - rh)) / (2 * rh), 0, 1)[..., None]
-        head = (C("#767d86").reshape(1, 1, 3) * (1 - tt) +
-                C("#3c4249").reshape(1, 1, 3) * tt)
-        cv.over(np.clip(head, 0, 1).astype(np.float32), hd)
-        ca, sa_ = math.cos(ang), math.sin(ang)
-        xr = (X - cx) * ca + (Y - cy) * sa_
-        yr = -(X - cx) * sa_ + (Y - cy) * ca
-        slot = cov(np.minimum(rh * 0.075 - np.abs(yr), rh * 0.52 - np.abs(xr)), aa)
-        cv.over(np.zeros(3, np.float32), np.clip(slot * hd * 0.72, 0, 1))
-        cv.over(np.ones(3, np.float32), np.clip(shift(slot, 3, 3) * hd * 0.22, 0, 1))
+    def rect(self, x0, y0, x1, y1, key):
+        """Fill columns x0..x1-1, rows y0..y1-1."""
+        for y in range(max(y0, 0), min(y1, self.h)):
+            for x in range(max(x0, 0), min(x1, self.w)):
+                self.px[y][x] = key
 
-    # ---- engraved vent slots, bottom left --------------------------------
-    for (vx0, vy0, vx1, vy1) in VENT:
-        vm = cov(rbox(X, Y, vx0, vy0, vx1, vy1, 6.0), aa)
-        cv.over(np.zeros(3, np.float32), np.clip(vm * 0.62, 0, 1))
-        lit = np.clip(shift(vm, -5, -4) - vm, 0, 1)
-        cv.over(np.ones(3, np.float32), np.clip(lit * 0.16, 0, 1))
+    def dot(self, x, y, key):
+        if 0 <= x < self.w and 0 <= y < self.h:
+            self.px[y][x] = key
 
-    # ---- display --------------------------------------------------------
-    dm = paint_recess(cv, X, Y, DX0, DY0, DX1, DY1, 30.0, aa, 1024.0,
-                      SCREEN_TOP, SCREEN_BOT)
+    def stamp(self, x, y, rows, on, off=None):
+        """rows: strings where '#' paints `on` and '.' paints `off`."""
+        for j, row in enumerate(rows):
+            for i, ch in enumerate(row):
+                if ch == "#":
+                    self.dot(x + i, y + j, on)
+                elif ch == "." and off is not None:
+                    self.dot(x + i, y + j, off)
 
-    # vignette inside the glass
-    vx = np.clip(np.abs(X - (DX0 + DX1) / 2) / ((DX1 - DX0) / 2), 0, 1)
-    vy = np.clip(np.abs(Y - (DY0 + DY1) / 2) / ((DY1 - DY0) / 2), 0, 1)
-    vig = np.clip((vx ** 3 + vy ** 3) * 0.55, 0, 1)
-    cv.over(np.zeros(3, np.float32), np.clip(vig * dm * 0.55, 0, 1))
+    def text(self, x, y, s, font, on, gap=1) -> int:
+        for ch in s:
+            if ch == " ":
+                x += 2
+                continue
+            g = font[ch]
+            self.stamp(x, y, g, on)
+            x += len(g[0]) + gap
+        return x
 
-    # ---- pixel-art layer -------------------------------------------------
-    rgb_l = np.zeros((n, n, 3), np.float32)
-    a_l = np.zeros((n, n), np.float32)
-    draw_analyzer(rgb_l, a_l, ss, BAR_X0, BAR_BASE, BAR_W, BAR_GAP, CELL,
-                  BAR_ROWS, HEIGHTS, CAPS, SEG_GAP, cap_h=12,
-                  cap_tint=0.15)
-    # seek groove: recessed slot, dim green fill up to the thumb
-    tx0, ty0, tx1, ty1 = THUMB
-    fill(rgb_l, a_l, GRV_X0 * ss, GRV_Y0 * ss, GRV_X1 * ss, GRV_Y1 * ss, C("#0b1712"))
-    fill(rgb_l, a_l, GRV_X0 * ss, GRV_Y0 * ss, GRV_X1 * ss, (GRV_Y0 + 6) * ss, C("#02070a"))
-    fill(rgb_l, a_l, GRV_X0 * ss, (GRV_Y1 - 6) * ss, GRV_X1 * ss, GRV_Y1 * ss, C("#2a4a38"))
-    fill(rgb_l, a_l, GRV_X0 * ss, (GRV_Y0 + 6) * ss, (tx0 + 28) * ss, (GRV_Y1 - 6) * ss,
-         C("#1d9c4a"))
-    # thumb
-    fill(rgb_l, a_l, tx0 * ss, ty0 * ss, tx1 * ss, ty1 * ss, C("#93a5b2"))
-    fill(rgb_l, a_l, tx0 * ss, ty0 * ss, tx1 * ss, (ty0 + 10) * ss, C("#eef4f9"))
-    fill(rgb_l, a_l, tx0 * ss, (ty1 - 10) * ss, tx1 * ss, ty1 * ss, C("#3e4a54"))
-    fill(rgb_l, a_l, (tx0 + 22) * ss, (ty0 + 14) * ss, (tx0 + 34) * ss, (ty1 - 14) * ss,
-         C("#2e3840"))
-
-    # bloom, under the bars
-    pm = rgb_l * a_l[..., None]
-    cx0, cy0 = int((DX0 - 40) * ss), int((DY0 - 40) * ss)
-    cx1, cy1 = int((DX1 + 40) * ss), int((DY1 + 40) * ss)
-    sub = pm[cy0:cy1, cx0:cx1]
-    g = np.zeros_like(sub)
-    for c in range(3):
-        g[..., c] = (blur(sub[..., c], 9.0 * ss) * 0.85 +
-                     blur(sub[..., c], 26.0 * ss) * 0.55)
-    dsub = dm[cy0:cy1, cx0:cx1][..., None]
-    cv.rgb[cy0:cy1, cx0:cx1] = np.clip(
-        cv.rgb[cy0:cy1, cx0:cx1] + g * dsub, 0, 1).astype(np.float32)
-    del pm, sub, g
-
-    cv.over(rgb_l, np.clip(a_l * dm, 0, 1))
-    del rgb_l, a_l
-
-    # ---- glass ----------------------------------------------------------
-    s = ((X - DX0) * 0.80 + (Y - DY0) * 1.0) / (DX1 - DX0)
-    wedge = sstep((0.46 - s) / 0.22)
-    streak = np.exp(-(((s - 0.60) / 0.055) ** 2))
-    cv.over(np.ones(3, np.float32), np.clip((wedge * 0.030 + streak * 0.042) * dm, 0, 1))
-
-    # ---- medallion -------------------------------------------------------
-    paint_coin(cv, X, Y, COIN[0], COIN[1], COIN[2], aa, detail=True)
-    return cv
+    def image(self) -> Image.Image:
+        im = Image.new("RGBA", (self.w, self.h), (0, 0, 0, 0))
+        im.putdata([PAL_RGBA[k] if k else (0, 0, 0, 0)
+                    for row in self.px for k in row])
+        return im
 
 
-# --------------------------------------------------------------------------
-# the simplified icon (16 and 32 px)
-# --------------------------------------------------------------------------
-
-SMALL = {
-    16: dict(
-        k=16, margin=1.5, disp=(3.0, 3.0, 13.0, 10.0), rad=1.5, bez=1.0,
-        bar_x0=4, base=9, bw=2, gap=1, rows=5,
-        heights=[2, 4, 3], caps=[3, 4, 4],
-        coin=(10.5, 10.5, 3.0), rim=0.90,
-        trects=[(9.0, 9.0, 12.0, 10.0), (10.0, 10.0, 11.0, 12.0)],
-        groove=None,
-    ),
-    32: dict(
-        k=8, margin=3.0, disp=(6.0, 5.0, 26.0, 21.0), rad=3.0, bez=1.0,
-        bar_x0=7, base=18, bw=3, gap=2, rows=12,
-        heights=[7, 11, 5, 9], caps=[9, 12, 8, 11],
-        coin=(22.0, 22.0, 6.4), rim=0.88,
-        trects=[(18.0, 19.0, 26.0, 21.0), (21.0, 21.0, 23.0, 25.0)],
-        groove=(8, 24, 19, 20, 16),
-    ),
+# LCD digits.  6x9 with 2 px uprights (128), 4x7 (64), 3x5 (32).
+LCD9 = {
+    "8": ["######", "##..##", "##..##", "##..##", "######",
+          "##..##", "##..##", "##..##", "######"],
+    "0": ["######", "##..##", "##..##", "##..##", "##..##",
+          "##..##", "##..##", "##..##", "######"],
+    "2": ["######", "....##", "....##", "....##", "######",
+          "##....", "##....", "##....", "######"],
+    "4": ["##..##", "##..##", "##..##", "##..##", "######",
+          "....##", "....##", "....##", "....##"],
+    "7": ["######", "....##", "....##", "....##", "....##",
+          "....##", "....##", "....##", "....##"],
+}
+LCD7 = {
+    "2": ["####", "...#", "...#", "####", "#...", "#...", "####"],
+    "4": ["#..#", "#..#", "#..#", "####", "...#", "...#", "...#"],
+    "7": ["####", "...#", "...#", "...#", "...#", "...#", "...#"],
+}
+F35 = {  # 3x5 caps and figures
+    "S": ["###", "#..", "###", "..#", "###"],
+    "E": ["###", "#..", "##.", "#..", "###"],
+    "I": ["#", "#", "#", "#", "#"],
+    "O": ["###", "#.#", "#.#", "#.#", "###"],
+    "N": ["#..#", "##.#", "#.##", "#..#", "#..#"],
+    "2": ["###", "..#", "###", "#..", "###"],
+    "3": ["###", "..#", ".##", "..#", "###"],
+    "4": ["#.#", "#.#", "###", "..#", "..#"],
+    "7": ["###", "..#", "..#", "..#", "..#"],
+    "%": ["#.#", "..#", ".#.", "#..", "#.#"],
+    "T": ["###", ".#.", ".#.", ".#.", ".#."],
+    "K": ["#.#", "#.#", "##.", "#.#", "#.#"],
+    "A": ["###", "#.#", "###", "#.#", "#.#"],
+    "M": ["#...#", "##.##", "#.#.#", "#...#", "#...#"],
+    "P": ["###", "#.#", "###", "#..", "#.."],
+    "L": ["#..", "#..", "#..", "#..", "###"],
+    "V": ["#.#", "#.#", "#.#", "#.#", ".#."],
 }
 
 
-def render_small(S: int) -> Cv:
-    cfg = SMALL[S]
-    k = cfg["k"]
-    n = S * k
-    X, Y = grid(n)
-    X = X / k
-    Y = Y / k
-    aa = 1.0 / k * 1.1
-    cv = Cv(n, n)
+def lcd(p: Px, x, y, s, font, lit="T", ghost=None, gap=1, colon_rows=()):
+    """Draw a clock string; ':' is a 1 px wide pair of dots at colon_rows."""
+    for ch in s:
+        if ch == ":":
+            for r in colon_rows:
+                p.dot(x, y + r, lit)
+            x += 1 + gap
+            continue
+        if ghost and "8" in font:
+            p.stamp(x, y, font["8"], ghost)
+        g = font[ch]
+        p.stamp(x, y, g, lit)
+        x += len(g[0]) + gap
+    return x
 
-    m = cfg["margin"]
-    c = S / 2.0
-    paint_body(cv, X, Y, c, c, c - m, aa, detail=False)
 
-    dx0, dy0, dx1, dy1 = cfg["disp"]
-    dm = paint_recess(cv, X, Y, dx0, dy0, dx1, dy1, cfg["rad"], aa, float(S),
-                      SCREEN_TOP, SCREEN_BOT)
+def wood(p: Px, x0, x1, profile, seed):
+    """A horizontal wood rail: one palette key per row, plus grain."""
+    for j, key in enumerate(profile):
+        p.rect(x0, j, x1, j + 1, key)
+    inner = range(1, len(profile) - 1)
+    if len(inner) < 2:
+        return
+    state = seed
+    for x in range(x0, x1):
+        state = (state * 1103515245 + 12345) & 0x7FFFFFFF
+        if state % 11 == 0:                          # a short streak
+            row = 1 + (state >> 8) % (len(profile) - 2)
+            key = "4" if (state >> 4) % 2 else "2"
+            for dx in range(1 + (state >> 12) % 4):
+                if x + dx < x1 and p.px[row][x + dx] not in ("5", "1"):
+                    p.dot(x + dx, row, key)
 
-    rgb_l = np.zeros((n, n, 3), np.float32)
-    a_l = np.zeros((n, n), np.float32)
-    draw_analyzer(rgb_l, a_l, k, cfg["bar_x0"], cfg["base"], cfg["bw"],
-                  cfg["gap"], 1, cfg["rows"], cfg["heights"], cfg["caps"], 0,
-                  cap_tint=0.0)
-    if cfg["groove"]:
-        gx0, gx1, gy0, gy1, gfill = cfg["groove"]
-        fill(rgb_l, a_l, gx0 * k, gy0 * k, gx1 * k, gy1 * k, C("#0c1a12"))
-        fill(rgb_l, a_l, gx0 * k, gy0 * k, gfill * k, gy1 * k, C("#1d9c4a"))
 
-    pm = rgb_l * a_l[..., None]
-    g = np.zeros_like(pm)
-    for ch in range(3):
-        g[..., ch] = blur(pm[..., ch], 0.9 * k) * 0.75
-    cv.rgb = np.clip(cv.rgb + g * dm[..., None], 0, 1).astype(np.float32)
-    del pm, g
+def key(p: Px, x0, y0, x1, y1, glyph=None):
+    """A cream transport key (face x0..x1-1, y0..y1-1) with a centred glyph."""
+    p.rect(x0, y0, x1, y1, "p")
+    p.rect(x0, y0, x1, y0 + 1, "P")
+    p.rect(x0, y1 - 1, x1, y1, "q")
+    if glyph:
+        gw, gh = len(glyph[0]), len(glyph)
+        gx = x0 + (x1 - x0 - gw + 1) // 2
+        gy = y0 + (y1 - y0 - gh) // 2
+        p.stamp(gx, gy, glyph, "K")
 
-    cv.over(rgb_l, np.clip(a_l * dm, 0, 1))
-    del rgb_l, a_l
 
-    ccx, ccy, cr = cfg["coin"]
-    paint_coin(cv, X, Y, ccx, ccy, cr, aa, detail=False,
-               t_rects=cfg["trects"], rim=cfg["rim"])
-    return cv
+def slider(p: Px, x0, x1, y, fill_to, thumb_w, thumb_h):
+    """Track row y from x0..x1-1, teal up to fill_to, thumb centred there."""
+    p.rect(x0 - 1, y - 1, x1 + 1, y + 2, "K")
+    p.rect(x0, y, fill_to, y + 1, "m")
+    p.rect(fill_to, y, x1, y + 1, "5")
+    tx = fill_to - thumb_w // 2
+    ty = y - thumb_h // 2
+    p.rect(tx, ty, tx + thumb_w, ty + thumb_h, "p")
+    p.rect(tx, ty, tx + thumb_w, ty + 1, "P")
+    p.rect(tx + thumb_w - 1, ty, tx + thumb_w, ty + thumb_h, "q")
+
+
+GLYPH5 = [
+    ["#...#", "#..##", "#.###", "#..##", "#...#"],   # previous
+    ["#..", "##.", "###", "##.", "#.."],              # play
+    ["##.##", "##.##", "##.##", "##.##", "##.##"],    # pause
+    ["###", "###", "###"],                            # stop
+    ["#...#", "##..#", "###.#", "##..#", "#...#"],   # next
+]
+
+
+def sprite_128() -> Px:
+    """86x46 miniature of the main window, drawn 1:1 for 128 px."""
+    W, H = 86, 46
+    p = Px(W, H, "p")
+    # ---- title bar, rails ----------------------------------------------
+    wood(p, 0, W, ["1", "4", "3", "2", "3", "4", "5"], seed=7)
+    for x, k in enumerate(["2", "3", "4"]):
+        p.rect(x, 7, x + 1, H, k)
+    for x, k in enumerate(["3", "4", "5"]):
+        p.rect(W - 3 + x, 7, W - 2 + x, H, k)
+    p.rect(3, H - 1, W - 3, H, "g")
+    # title plate: TOKENAMP
+    px0, px1 = 24, 62
+    p.rect(px0 - 1, 0, px1 + 1, 7, "5")
+    p.rect(px0, 0, px1, 7, "p")
+    p.rect(px0, 0, px1, 1, "P")
+    p.rect(px0, 6, px1, 7, "q")
+    p.text(px0 + 2, 1, "TOKENAMP", F35, "K")
+    # menu key, window keys
+    p.rect(4, 2, 7, 5, "D")
+    p.dot(5, 3, "p")
+    for bx in (71, 75, 79):
+        p.rect(bx, 2, bx + 3, 5, "D")
+        p.dot(bx + 1, 3, "p")
+
+    # ---- display --------------------------------------------------------
+    p.rect(4, 8, 82, 29, "K")
+    p.rect(5, 9, 81, 28, ".")
+    p.rect(4, 29, 82, 30, "P")                       # lit sill
+
+    # amber status lamp, play triangle, -02:47
+    p.rect(6, 13, 7, 16, "A")
+    p.stamp(8, 12, ["#..", "##.", "###", "##.", "#.."], "T")
+    p.rect(13, 14, 17, 15, "T")
+    lcd(p, 18, 10, "02:47", LCD9, ghost="o", colon_rows=(2, 6))
+
+    # visualiser under the clock: 2 px bars, red peaks
+    heights = [3, 5, 4, 2, 4, 6, 5, 4, 6, 3, 0, 4, 2]
+    base = 27
+    for i, hgt in enumerate(heights):
+        bx = 7 + i * 3
+        if hgt:
+            p.rect(bx, base - hgt + 1, bx + 2, base + 1, "t")
+            p.rect(bx, base - hgt + 1, bx + 2, base - hgt // 2 + 1, "m")
+            p.rect(bx, base - hgt + 1, bx + 2, base - hgt + 2, "T")
+        p.rect(bx, base - hgt - 1, bx + 2, base - hgt, "R")
+
+    # right panel: scale ticks, SESSION, underline, 43% and LIVE lamp
+    for x in range(52, 80, 3):
+        p.dot(x, 10, "t")
+    p.text(52, 12, "SESSION", F35, "T")
+    p.rect(52, 18, 79, 19, "t")
+    for x in range(52, 80, 4):
+        p.dot(x, 19, "t")
+    p.text(52, 21, "43%", F35, "m")
+    p.dot(64, 23, "R")
+    p.text(66, 21, "LIVE", F35, "R")
+
+    # ---- slider row -----------------------------------------------------
+    p.stamp(6, 33, ["###.####.##.####"], "g")      # TOKEN FLOW -- PWR
+    p.dot(23, 33, "A")
+    slider(p, 27, 50, 33, 40, 4, 5)
+    slider(p, 54, 66, 33, 60, 4, 5)
+    p.rect(69, 31, 74, 36, "D")
+    p.rect(75, 31, 80, 36, "D")
+    p.stamp(70, 33, ["#.##"], "e")
+    p.stamp(76, 33, ["#.##"], "e")
+
+    # ---- transport ------------------------------------------------------
+    ky0, ky1 = 37, 44                                # key faces ky0..ky1-1
+    p.rect(4, ky0 - 1, 45, ky1 + 1, "K")
+    for i, g in enumerate(GLYPH5):
+        x0 = 5 + i * 8
+        key(p, x0, ky0, x0 + 7, ky1, g)
+    p.rect(47, ky0 - 1, 56, ky1 + 1, "K")            # eject
+    key(p, 48, ky0, 55, ky1, ["..#..", ".###.", "#####", ".....", "#####"])
+    p.rect(58, ky0, 79, ky1 - 1, "D")                # CYCLE | ALERT
+    p.rect(68, ky0, 69, ky1 - 1, "K")
+    p.dot(60, ky0 + 3, "A")
+    p.rect(62, ky0 + 3, 66, ky0 + 4, "e")
+    p.rect(71, ky0 + 3, 77, ky0 + 4, "e")
+    p.rect(80, ky0 + 1, 82, ky1 - 2, "K")            # knob
+    return p
+
+
+def sprite_64() -> Px:
+    """44x24 miniature for 64 px."""
+    W, H = 44, 24
+    p = Px(W, H, "p")
+    wood(p, 0, W, ["1", "3", "4", "5"], seed=3)
+    # title plate with a line of lettering, menu key, window keys
+    p.rect(12, 0, 32, 4, "p")
+    p.rect(12, 0, 32, 1, "P")
+    p.rect(12, 3, 32, 4, "q")
+    p.stamp(14, 2, ["#.##.#.##.##.#.##"], "K")
+    p.rect(2, 1, 4, 3, "D")
+    for bx in (35, 38, 41):
+        p.rect(bx, 1, bx + 2, 3, "D")
+    p.rect(0, 4, 1, H, "2")
+    p.rect(1, 4, 2, H, "4")
+    p.rect(W - 2, 4, W - 1, H, "3")
+    p.rect(W - 1, 4, W, H, "5")
+    p.rect(2, H - 1, W - 2, H, "g")
+    # display: play mark, 2:47, visualiser
+    p.rect(3, 5, 41, 14, ".")
+    p.rect(3, 14, 41, 15, "P")
+    p.stamp(5, 7, ["#..", "##.", "###", "##.", "#.."], "T")
+    lcd(p, 10, 6, "2:47", LCD7, colon_rows=(2, 4))
+    for i, hgt in enumerate([3, 5, 6, 4, 6, 5, 3]):
+        bx = 28 + i * 2
+        p.rect(bx, 13 - hgt + 1, bx + 1, 13, "m")
+        p.dot(bx, 13 - hgt + 1, "T")
+        p.dot(bx, 13 - hgt, "R")
+    # volume and balance sliders, EQ / PL
+    slider(p, 5, 19, 17, 12, 2, 3)
+    slider(p, 22, 30, 17, 27, 2, 3)
+    p.rect(33, 16, 36, 19, "D")
+    p.rect(37, 16, 40, 19, "D")
+    # transport keys, eject
+    p.rect(3, 19, 30, 23, "K")
+    for i in range(5):
+        key(p, 4 + i * 5, 20, 8 + i * 5, 23)
+    p.rect(10, 21, 11, 22, "K")                      # play mark
+    p.rect(20, 21, 22, 22, "K")                      # stop mark
+    p.rect(31, 19, 37, 23, "K")
+    key(p, 32, 20, 36, 23)
+    p.rect(33, 21, 35, 22, "K")
+    return p
+
+
+def sprite_32() -> Px:
+    """22x13 mark for 32 px: title stripe, 2:47, key row."""
+    W, H = 22, 13
+    p = Px(W, H, "p")
+    p.rect(0, 0, W, 1, "2")
+    p.rect(0, 1, W, 2, "4")
+    p.rect(6, 0, 16, 2, "p")
+    p.rect(6, 0, 16, 1, "P")
+    p.rect(0, 2, 1, H, "3")
+    p.rect(W - 1, 2, W, H, "4")
+    p.rect(1, 2, W - 1, 9, ".")
+    lcd(p, 3, 3, "2:47", F35, colon_rows=(1, 3))
+    p.rect(17, 5, 18, 8, "m")
+    p.rect(19, 4, 20, 8, "m")
+    p.dot(17, 4, "R")
+    p.dot(19, 3, "R")
+    p.rect(1, 10, W - 1, 12, "K")
+    for x0 in (2, 6, 10, 14):
+        p.rect(x0, 10, x0 + 3, 12, "p")
+    p.rect(18, 10, 20, 12, "D")
+    p.rect(1, 12, W - 1, 13, "g")
+    return p
+
+
+def sprite_16() -> Px:
+    """10x7 mark for 16 px: wood stripe with plate, display with bars."""
+    W, H = 10, 7
+    p = Px(W, H, "p")
+    p.rect(0, 0, W, 1, "3")
+    p.rect(3, 0, 7, 1, "P")
+    p.rect(0, 1, 1, H, "3")
+    p.rect(W - 1, 1, W, H, "4")
+    p.rect(1, 1, W - 1, 5, ".")
+    for x, h in ((2, 2), (4, 3), (6, 2), (7, 1)):
+        p.rect(x, 5 - h, x + 1, 5, "T")
+    p.rect(1, 6, W - 1, 7, "g")
+    p.rect(2, 5, 8, 6, "q")
+    return p
 
 
 # --------------------------------------------------------------------------
-# outputs
+# composition
 # --------------------------------------------------------------------------
+
+def place(S: int, w: int, h: int) -> tuple[int, int]:
+    """Top-left of a w x h player centred in an S canvas, a hair above centre
+    so the shadow below balances it."""
+    x0 = (S - w) // 2
+    y0 = int(round(S * 0.49 - h / 2.0))
+    return x0, y0
+
+
+def compose(S: int, sprite: Image.Image, ss: int) -> Image.Image:
+    w, h = sprite.size
+    x0, y0 = place(S, w, h)
+    img = render_tile(S, (x0, y0, x0 + w, y0 + h), ss)
+    img.alpha_composite(sprite, (x0, y0))
+    return img
+
+
+def nn(im: Image.Image, k: int) -> Image.Image:
+    return im.resize((im.width * k, im.height * k), Image.NEAREST)
+
 
 ICONSET_FILES = [
     ("icon_16x16.png", 16), ("icon_16x16@2x.png", 32),
@@ -629,14 +607,16 @@ def build() -> dict:
         shutil.rmtree(ICONSET)
     os.makedirs(ICONSET)
 
-    big = render_detailed()
-    sizes: dict[int, Image.Image] = {}
-    for s in (1024, 512, 256, 128, 64):
-        sizes[s] = big.to_image(s)
-    del big
-    for s in (32, 16):
-        # exact k x k area average: keeps the 1-px pixel art pixel-perfect
-        sizes[s] = render_small(s).to_image(s, Image.BOX)
+    player = sprite_128().image()
+    sizes: dict[int, Image.Image] = {
+        1024: compose(1024, nn(player, 8), 2),
+        512: compose(512, nn(player, 4), 2),
+        256: compose(256, nn(player, 2), 4),
+        128: compose(128, player, 6),
+        64: compose(64, sprite_64().image(), 8),
+        32: compose(32, sprite_32().image(), 8),
+        16: compose(16, sprite_16().image(), 16),
+    }
 
     sizes[1024].save(os.path.join(ICON_DIR, "icon_1024.png"))
     for name, s in ICONSET_FILES:
@@ -661,10 +641,10 @@ def _font(sz: int):
 
 def build_preview(sizes: dict) -> None:
     row_a = [16, 32, 64, 128, 256, 512, 1024]
-    row_b = [16, 32, 64]
+    row_b = [(16, 4), (32, 4), (64, 4), (128, 2)]
     pad, gap = 36, 22
     cw_a = [max(s, 56) for s in row_a]          # keep labels from colliding
-    cw_b = [max(s * 4, 96) for s in row_b]
+    cw_b = [max(s * k, 96) for s, k in row_b]
     wa = sum(cw_a) + gap * (len(row_a) - 1)
     wb = sum(cw_b) + gap * (len(row_b) - 1)
     inner = max(wa, wb)
@@ -693,13 +673,13 @@ def build_preview(sizes: dict) -> None:
             d.text((x, a_base + 8), "%d px" % s, fill=fg, font=f)
             x += cw + gap
         t2 = a_base + 8 + 24
-        d.text((pad, t2), "4x nearest-neighbour", fill=fg, font=fb)
+        d.text((pad, t2), "enlarged, nearest-neighbour", fill=fg, font=fb)
         b_base = t2 + 30 + hb
         x = pad + (inner - wb) // 2
-        for s, cw in zip(row_b, cw_b):
-            im = sizes[s].resize((s * 4, s * 4), Image.NEAREST)
-            out.paste(im, (x + (cw - s * 4) // 2, b_base - s * 4), im)
-            d.text((x, b_base + 8), "%d px @4x" % s, fill=fg, font=f)
+        for (s, k), cw in zip(row_b, cw_b):
+            im = sizes[s].resize((s * k, s * k), Image.NEAREST)
+            out.paste(im, (x + (cw - s * k) // 2, b_base - s * k), im)
+            d.text((x, b_base + 8), "%d px @%dx" % (s, k), fill=fg, font=f)
             x += cw + gap
 
     out.save(os.path.join(ICON_DIR, "preview_sizes.png"))
