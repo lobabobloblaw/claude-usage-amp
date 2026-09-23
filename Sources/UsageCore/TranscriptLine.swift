@@ -53,6 +53,9 @@ struct TranscriptLineParser {
         guard !model.isEmpty, model != "<synthetic>" else { return nil }
 
         guard let ts = root["timestamp"] as? String, let epoch = ISO8601.epochSeconds(ts) else { return nil }
+        // The scan cache refuses a row outside 1970 … year 3000 (it means the file is not ours), so
+        // one such line would otherwise cost a cold scan on every launch. Drop the line instead.
+        guard ScanCache.isPlausibleEpoch(epoch) else { return nil }
 
         var session = fallbackSession
         if session.isEmpty { session = (root["sessionId"] as? String) ?? (root["session_id"] as? String) ?? "" }

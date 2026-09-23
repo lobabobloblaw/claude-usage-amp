@@ -38,12 +38,28 @@ final class TranscriptScanner {
     var maxFileAge: TimeInterval = 10 * 86_400
     /// Events older than this are dropped (SPEC 4.1: 11 days).
     var eventTTL: TimeInterval = 11 * 86_400
+    /// How long an evicted response's id is remembered, counted from the response's own timestamp.
+    /// A resumed or forked session can copy a response for as long as its transcript exists, and
+    /// Claude Code keeps transcripts for 30 days by default (`cleanupPeriodDays`), so a copy that
+    /// turns up later than this has nothing left to be a copy of on a default setup.
+    var evictedMemory: TimeInterval = 30 * 86_400
+    /// A file out of the scan window whose mtime is this much older than the event TTL can only
+    /// still hold lines stamped after it was last written (a bad clock); it is dropped with them.
+    static let retiredFileSlack: TimeInterval = 86_400
     /// A file with more unread bytes than this is read after the quick ones on a cold start.
     static var deferredFileBytes: UInt64 = 16 << 20
 
+    /// Every file the index draws on: the ones inside the scan window, plus files that aged out of
+    /// it and still hold events inside the event TTL. Those are no longer read, but their sightings
+    /// keep deciding ownership until `evict` retires them (see `fullScan`).
     private(set) var files: [String: ScannedFile] = [:]
     /// Global dedup index, keyed by `message.id`. See `IndexEntry` for the ownership rule.
     private(set) var byID: [String: IndexEntry] = [:]
+    /// `message.id` -> timestamp of responses that were counted and then evicted by the TTL. A
+    /// later sighting of one of these ids (a session resumed or forked after the original aged out)
+    /// is the same response again, not new usage, so it is never admitted. Entries are forgotten
+    /// `evictedMemory` after the response's timestamp, which bounds the set to about a month of ids.
+    private(set) var tombstones: [String: Double] = [:]
     private(set) var stats = ScanStats()
 
     private var parser = TranscriptLineParser()
@@ -53,6 +69,11 @@ final class TranscriptScanner {
     private(set) var fastEventCount = 0
     /// Bumped whenever the event set changes, so the aggregator knows to rebuild.
     private(set) var generation: UInt64 = 0
+    /// Bumped whenever anything the scan cache persists changes: the event set, but also a file's
+    /// offset, size, mtime or inode, the file set and the evicted ids. An offset that moves past
+    /// lines with no usage in them changes nothing the aggregator sees, but it must still be saved,
+    /// or the next launch reads those bytes again.
+    private(set) var persistGeneration: UInt64 = 0
 
     /// Called after every file during a full scan so the owner can publish partial results.
     var onFileProgress: ((Int, Int) -> Void)?
@@ -120,12 +141,24 @@ final class TranscriptScanner {
         var done = 0
         let live = Set(candidates.map { $0.path })
 
-        // Forget files that dropped out of the window (or were deleted) so the cache stays bounded.
-        let stale = files.keys.filter { !live.contains($0) }
-        if !stale.isEmpty {
-            for p in stale { files.removeValue(forKey: p) }
-            changed = true
-            needsRebuild = true
+        // A file that left the scan window is not read any more, but it keeps its events until
+        // they expire; `evict` retires it after that. Forgetting them here would hand every
+        // response it shares with a resumed or forked copy to the copy's later sighting, and so
+        // re-date it (A5: earliest sighting wins). Only a file that is gone, or was replaced or cut
+        // short while out of the window, loses its events at once, as before.
+        for p in files.keys.filter({ !live.contains($0) }) {
+            guard var f = files[p] else { continue }
+            var st = stat()
+            if stat(p, &st) == 0, (st.st_mode & S_IFMT) == S_IFREG, st.st_size >= 0,
+               UInt64(st.st_ino) == f.inode, UInt64(st.st_size) >= f.offset {
+                f.mtime = Double(st.st_mtimespec.tv_sec) + Double(st.st_mtimespec.tv_nsec) / 1e9
+                store(f)
+            } else {
+                files.removeValue(forKey: p)
+                persistGeneration &+= 1
+                changed = true
+                needsRebuild = true
+            }
         }
 
         // Work out what actually has to be read before touching any of it: an untouched file costs
@@ -171,8 +204,9 @@ final class TranscriptScanner {
             let results = TranscriptScanner.parseInParallel(batch, states: batch.map { files[$0.path] },
                                                            shouldStop: shouldStop)
             for r in results {
-                if merge(result: r) { needsRebuild = true }
-                if !r.events.isEmpty { changed = true }
+                let m = merge(result: r)
+                if m.needsRebuild { needsRebuild = true }
+                if m.added { changed = true }
             }
             done += batch.count
             onFileProgress?(done, candidates.count)
@@ -209,9 +243,26 @@ final class TranscriptScanner {
         state.mtime = c.mtime
         state.inode = c.inode
         state.size = c.size
-        files[c.path] = state
+        store(state)
         if state.offset >= c.size { return wasReset ? .reset : .unchanged }
         return wasReset ? .reset : .needsRead
+    }
+
+    /// Store a file's state, bumping `persistGeneration` when anything the cache keeps for it moved.
+    /// (Event changes always go through the index, which bumps it too.)
+    private func store(_ state: ScannedFile) {
+        if let old = files[state.path], old.offset == state.offset, old.size == state.size,
+           old.mtime == state.mtime, old.inode == state.inode {
+            files[state.path] = state
+            return
+        }
+        files[state.path] = state
+        persistGeneration &+= 1
+    }
+
+    /// Drops lines of responses that were already counted and evicted (see `tombstones`).
+    @inline(__always) private func admit(_ events: [UsageEvent]) -> [UsageEvent] {
+        tombstones.isEmpty || events.isEmpty ? events : events.filter { tombstones[$0.id] == nil }
     }
 
     struct FileParseResult {
@@ -262,13 +313,14 @@ final class TranscriptScanner {
         return results.compactMap { $0 }
     }
 
-    /// Fold one file's parse result into the shared state. Scan queue only. Returns true when the
-    /// index must be rebuilt to apply the ownership rule.
-    private func merge(result r: FileParseResult) -> Bool {
-        guard var state = files[r.path] else { return false }
+    /// Fold one file's parse result into the shared state. Scan queue only. `added` says whether
+    /// any event went in; `needsRebuild` that the index must be rebuilt to apply the ownership rule.
+    private func merge(result r: FileParseResult) -> (added: Bool, needsRebuild: Bool) {
+        guard var state = files[r.path] else { return (false, false) }
+        let admitted = admit(r.events)
         state.offset = r.endOffset
-        if !r.events.isEmpty { state.events.append(contentsOf: r.events) }
-        files[r.path] = state
+        if !admitted.isEmpty { state.events.append(contentsOf: admitted) }
+        store(state)
 
         stats.bytesRead += r.bytesRead
         stats.linesPrefiltered += r.prefiltered
@@ -276,7 +328,8 @@ final class TranscriptScanner {
         stats.eventsSeen += r.events.count
         stats.filesParsed += 1
 
-        return r.events.isEmpty ? false : mergeIntoIndex(r.events, path: r.path)
+        guard !admitted.isEmpty else { return (false, false) }
+        return (true, mergeIntoIndex(admitted, path: r.path))
     }
 
     /// Incremental tail of a set of paths reported by the watcher.
@@ -289,7 +342,11 @@ final class TranscriptScanner {
             guard path.hasSuffix(".jsonl") else { continue }
             var st = stat()
             guard stat(path, &st) == 0, (st.st_mode & S_IFMT) == S_IFREG else {
-                if files.removeValue(forKey: path) != nil { changed = true; needsRebuild = true }
+                if files.removeValue(forKey: path) != nil {
+                    persistGeneration &+= 1
+                    changed = true
+                    needsRebuild = true
+                }
                 continue
             }
             let mtime = Double(st.st_mtimespec.tv_sec) + Double(st.st_mtimespec.tv_nsec) / 1e9
@@ -318,14 +375,14 @@ final class TranscriptScanner {
         if !resetHappened && state.inode == c.inode && c.size == state.size && state.offset == c.size {
             // Nothing appended since last time, and the last pass consumed every complete line.
             state.mtime = c.mtime
-            files[c.path] = state
+            store(state)
             return .unchanged
         }
         guard c.size > state.offset else {
             state.size = c.size
             state.mtime = c.mtime
             state.inode = c.inode
-            files[c.path] = state
+            store(state)
             return resetHappened ? .reset : .unchanged
         }
 
@@ -353,13 +410,14 @@ final class TranscriptScanner {
         state.size = c.size
         state.mtime = c.mtime
         state.inode = c.inode
-        if !newEvents.isEmpty { state.events.append(contentsOf: newEvents) }
-        files[c.path] = state
+        let admitted = admit(newEvents)
+        if !admitted.isEmpty { state.events.append(contentsOf: admitted) }
+        store(state)
 
         if resetHappened { return .reset }
-        if newEvents.isEmpty { return .unchanged }
+        if admitted.isEmpty { return .unchanged }
         // Fast path: fold the new events straight into the dedup index.
-        return mergeIntoIndex(newEvents, path: c.path) ? .appendedShared : .appended
+        return mergeIntoIndex(admitted, path: c.path) ? .appendedShared : .appended
     }
 
     // MARK: - Dedup index
@@ -389,6 +447,7 @@ final class TranscriptScanner {
         }
         sortedCache = nil
         generation &+= 1
+        persistGeneration &+= 1
         return needsRebuild
     }
 
@@ -425,29 +484,58 @@ final class TranscriptScanner {
         byID = index
         sortedCache = nil
         generation &+= 1
+        persistGeneration &+= 1
     }
 
     // MARK: - Eviction
 
-    /// Drop events older than the TTL. Returns true when anything was dropped.
+    /// Drop events older than the TTL, and retire files that no longer hold anything. Returns true
+    /// when the event set changed.
     ///
     /// An event goes as a whole, judged by the timestamp the index gives it (its earliest
     /// sighting), and every line of it leaves every file. Evicting line by line would let a
     /// resumed copy that carries a new timestamp outlive the original line, and the rebuild would
-    /// then bring an 11 day old response back as today's usage in the resumed session.
+    /// then bring an 11 day old response back as today's usage in the resumed session. Its id is
+    /// kept as a tombstone, so a copy that only turns up later (a session resumed after the
+    /// original aged out) is not counted as new usage either.
+    ///
+    /// A file outside the scan window is kept only for its events: it goes once they are gone,
+    /// and in any case once it is more than a day past the event TTL, when every line it still
+    /// holds is stamped a day or more after the file was last written. That bounds the retained
+    /// set to files modified in the last twelve days.
     @discardableResult
     func evict(now: Date) -> Bool {
-        let cutoff = now.timeIntervalSince1970 - eventTTL
+        let nowEpoch = now.timeIntervalSince1970
+        let cutoff = nowEpoch - eventTTL
         var doomed = Set<String>()
-        for (id, entry) in byID where entry.event.timestamp < cutoff { doomed.insert(id) }
-        guard !doomed.isEmpty else { return false }
-        for (path, var f) in files {
-            let before = f.events.count
-            f.events.removeAll { doomed.contains($0.id) }
-            if f.events.count != before { files[path] = f }
+        for (id, entry) in byID where entry.event.timestamp < cutoff {
+            doomed.insert(id)
+            tombstones[id] = entry.event.timestamp
         }
-        rebuildIndex()
-        return true
+        if !doomed.isEmpty { persistGeneration &+= 1 }
+        let forgetBefore = nowEpoch - evictedMemory
+        if tombstones.values.contains(where: { $0 < forgetBefore }) {
+            tombstones = tombstones.filter { $0.value >= forgetBefore }
+            persistGeneration &+= 1
+        }
+
+        var eventsChanged = !doomed.isEmpty
+        let windowStart = nowEpoch - maxFileAge
+        let retireBefore = cutoff - TranscriptScanner.retiredFileSlack
+        for (path, var f) in files {
+            if !doomed.isEmpty {
+                let before = f.events.count
+                f.events.removeAll { doomed.contains($0.id) }
+                if f.events.count != before { files[path] = f }
+            }
+            if f.mtime < windowStart && (f.events.isEmpty || f.mtime < retireBefore) {
+                if !f.events.isEmpty { eventsChanged = true }
+                files.removeValue(forKey: path)
+                persistGeneration &+= 1
+            }
+        }
+        if eventsChanged { rebuildIndex() }
+        return eventsChanged
     }
 
     // MARK: - Output
@@ -497,8 +585,17 @@ final class TranscriptScanner {
     func loadCache(from url: URL) -> Bool {
         let t0 = Date()
         guard let data = try? Data(contentsOf: url) else { return false }
-        guard let loaded = ScanCache.decode(data) else { return false }
-        files = loaded
+        guard let loaded = ScanCache.decodeState(data) else { return false }
+        tombstones = loaded.evicted
+        files = loaded.files
+        // The writer never stores a line of an evicted id, but a file from elsewhere might: such a
+        // line would sit outside the index and so never be evicted.
+        if !tombstones.isEmpty {
+            for (path, var f) in files where f.events.contains(where: { tombstones[$0.id] != nil }) {
+                f.events.removeAll { tombstones[$0.id] != nil }
+                files[path] = f
+            }
+        }
         rebuildIndex()
         stats.loadedFromCache = true
         stats.cacheLoadSeconds = Date().timeIntervalSince(t0)
@@ -508,10 +605,10 @@ final class TranscriptScanner {
     /// Encoding 30 000 events takes long enough to be visible as a stalled clock if it runs on the
     /// scan queue, so the caller gets a value-semantic copy of the state (O(1), copy-on-write) to
     /// encode and write on its own queue.
-    func cacheSnapshotForSaving() -> [String: ScannedFile] { files }
+    func cacheSnapshotForSaving() -> ScanCacheState { ScanCacheState(files: files, evicted: tombstones) }
 
-    static func writeCache(_ files: [String: ScannedFile], to url: URL) {
-        let data = ScanCache.encode(files: files)
+    static func writeCache(_ state: ScanCacheState, to url: URL) {
+        let data = ScanCache.encode(files: state.files, evicted: state.evicted)
         try? TokenampPaths.writeAtomically(data, to: url)
     }
 }

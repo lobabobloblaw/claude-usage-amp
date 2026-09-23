@@ -30,6 +30,9 @@ public enum SelfTest {
         attributionDeterminism(&runner)
         ownershipRule(&runner)
         evictionOfCopies(&runner)
+        cacheHardening(&runner)
+        agedOutOriginals(&runner)
+        offsetPersistence(&runner)
         fastMode(&runner)
         liveHTTP(&runner)
         limitRollover(&runner)
@@ -422,9 +425,9 @@ public enum SelfTest {
                 "code/tokenamp", "two trailing components")
         r.equal(agg.projectName(for: home, sessionID: "x"), "~", "home itself")
         r.equal(agg.projectName(for: "/tmp", sessionID: "x"), "tmp", "single component")
-        r.equal(agg.projectName(for: home + "/Library/Application Support/Claude/scratch-workspaces/28e9f5fc-6789-4058-942b-d18a6b3eae0b/48793b39-359c-4729-a407-fd3afa6321f3/scratch-2026-09-20", sessionID: "x"),
-                "scratch-workspaces/scratch-2026-09-20", "uuid directories dropped")
-        r.expect(Aggregator.looksLikeUUID("48793b39-359c-4729-a407-fd3afa6321f3"), "uuid recognised")
+        r.equal(agg.projectName(for: home + "/Library/Application Support/Claude/scratch-workspaces/0a1b2c3d-4e5f-4a6b-8c7d-9e0f1a2b3c4d/5d6e7f80-9a0b-4c1d-8e2f-3a4b5c6d7e8f/scratch-2000-01-01", sessionID: "x"),
+                "scratch-workspaces/scratch-2000-01-01", "uuid directories dropped")
+        r.expect(Aggregator.looksLikeUUID("5d6e7f80-9a0b-4c1d-8e2f-3a4b5c6d7e8f"), "uuid recognised")
         r.expect(!Aggregator.looksLikeUUID("tokenamp"), "project name is not a uuid")
         r.equal(agg.projectName(for: "", sessionID: "abcdefgh-1234"), "abcdefgh", "no cwd falls back to the session id")
     }
@@ -1041,11 +1044,17 @@ public enum SelfTest {
         r.equal(scanner.uniqueEventCount, 1, "rescan detects truncation and re-reads from zero")
         r.equal(scanner.sortedEvents().first?.id ?? "", "f9", "only the new content survives a rescan")
 
-        // A file that leaves the 10 day window must take its events with it.
+        // A file that leaves the 10 day window is no longer read, but keeps its events until
+        // eviction: dropping them early would re-date any response a resumed copy shares (A5).
+        // This file's only line is stamped long after the file's own mtime (a bad clock), so the
+        // next eviction retires the file together with whatever it still holds.
         let stamp = Date().addingTimeInterval(-20 * 86_400)
         try? FileManager.default.setAttributes([.modificationDate: stamp], ofItemAtPath: file.path)
         scanner.fullScan(now: Date())
-        r.equal(scanner.uniqueEventCount, 0, "a file that ages out of the window loses its events")
+        r.equal(scanner.uniqueEventCount, 1, "a file that ages out of the window keeps its events until eviction")
+        scanner.evict(now: Date())
+        r.equal(scanner.uniqueEventCount, 0, "eviction retires a file more than a day past the event TTL")
+        r.expect(scanner.files[file.path] == nil, "the retired file leaves the scan state")
     }
 
     // MARK: - A file that shrinks under the reader
@@ -1377,6 +1386,265 @@ public enum SelfTest {
         _ = tailed.tail(paths: [dir3.appendingPathComponent(copy).path, dir3.appendingPathComponent(orig).path], now: Date())
         tailed.evict(now: Date())
         r.equal(signature(tailed), signature(cold), "tail then eviction == cold scan then eviction")
+    }
+
+    // MARK: - Scan cache hardening
+
+    /// The reader's own arithmetic must not trap on a hostile file, a 64-bit inode must survive the
+    /// round trip, and one implausible transcript timestamp must not make every cache unreadable.
+    static func cacheHardening(_ r: inout Runner) {
+        r.section("scan cache hardening")
+        func decodes(_ text: String) -> Bool {
+            let out = ScanCache.decode(Data(text.utf8))
+            r.checks += 1                       // reaching this line at all is the check
+            return out != nil
+        }
+        let files = "\"strings\":[\"s\"],\"files\":[{\"p\":\"/a\",\"sz\":10,\"mt\":1,\"in\":1,\"of\":10,\"e\":[]}]"
+
+        // A 22 digit exponent used to overflow the exponent accumulator (a trap on every launch).
+        r.expect(!decodes("{\"v\":2e1000000000000000000000,\(files)}"), "a 22-digit exponent is rejected, not trapped on")
+        r.expect(!decodes("{\"v\":2e-1000000000000000000000,\(files)}"), "a 22-digit negative exponent is rejected")
+        r.expect(!decodes("{\"v\":2,\"strings\":[],\"files\":[{\"p\":\"/a\",\"sz\":1e99999999999999999999999,\"mt\":1,\"in\":1,\"of\":0,\"e\":[]}]}"),
+                 "a number out of Double's range rejects the cache")
+        r.expect(!decodes("{\"v\":2,\"strings\":[\"s\"],\"files\":[{\"p\":\"/a\",\"sz\":10,\"mt\":0,\"in\":1,\"of\":0,\"e\":[[1500,0,0,0,1e99999999999999999999,2,3,0,4,0,\"m\"]]}]}"),
+                 "a huge exponent inside an event row rejects the cache")
+        r.expect(!decodes("{\"v\":2,\"strings\":[],\"files\":[{\"p\":\"/a\",\"sz\":0e999,\"mt\":1,\"in\":1,\"of\":0,\"e\":[]}]}"),
+                 "NaN (0e999) rejects the cache")
+        r.expect(!decodes("{\"v\":2,\"strings\":[],\"files\":[{\"p\":\"/a\",\"sz\":\(String(repeating: "9", count: 400)),\"mt\":1,\"in\":1,\"of\":0,\"e\":[]}]}"),
+                 "a 400 digit integer rejects the cache")
+        r.expect(!decodes("{\"v\":2,\"strings\":[],\"files\":[]]"), "a stray bracket where the closing brace belongs is rejected")
+        r.expect(decodes("{\"v\":2e0,\(files)}"), "an ordinary exponent still reads")
+        r.close(ScanCache.decode(Data("{\"v\":2,\"strings\":[],\"files\":[{\"p\":\"/a\",\"sz\":1,\"mt\":1.5e3,\"in\":1,\"of\":1,\"e\":[]}]}".utf8))?["/a"]?.mtime ?? 0,
+                1500, 1e-9, "a fractional mantissa with an exponent")
+
+        // Inodes: hashed 64-bit inodes (FUSE, cloud file systems) reach 2^63, where `Int(UInt64)`
+        // trapped in the writer, and past 2^53, where a Double loses the low bits and the file
+        // would look replaced (re-read from zero) on every launch.
+        for inode in [UInt64(1) << 63, UInt64.max - 6, (UInt64(1) << 53) + 1] {
+            var f = ScannedFile(path: "/tmp/fuse/f.jsonl", sessionID: "s")
+            f.inode = inode
+            f.size = 10
+            f.offset = 10
+            let back = ScanCache.decode(ScanCache.encode(files: [f.path: f]))?[f.path]
+            r.equal(back?.inode ?? 0, inode, "inode \(inode) round-trips exactly")
+        }
+        // A version 2 file from the signed writer reads back unchanged.
+        r.equal(ScanCache.decode(Data("{\"v\":2,\"strings\":[],\"files\":[{\"p\":\"/a\",\"sz\":1,\"mt\":1,\"in\":9007199254740993,\"of\":1,\"e\":[]}]}".utf8))?["/a"]?.inode ?? 0,
+                9_007_199_254_740_993, "a signed-writer inode past 2^53 reads exactly")
+        r.expect(decodes("{\"v\":2,\"strings\":[],\"files\":[{\"p\":\"/a\",\"sz\":1,\"mt\":1,\"in\":18446744073709551616,\"of\":1,\"e\":[]}]}"),
+                 "an inode past 2^64 is clamped, not trapped on")
+
+        // The evicted-id list: day-grouped, optional (a version 2 file from before it still loads,
+        // with nothing evicted), and as strictly checked as the rest.
+        let gone: [String: Double] = ["g1": 1_789_000_000, "g2": 1_789_000_500, "g3": 1_789_200_000]
+        let goneBack = ScanCache.decodeState(ScanCache.encode(files: [:], evicted: gone))?.evicted ?? [:]
+        r.equal(Set(goneBack.keys), Set(gone.keys), "evicted ids round-trip")
+        r.expect(gone.allSatisfy { id, t in (goneBack[id] ?? -1) <= t && t - (goneBack[id] ?? -1) < ScanCache.evictedDay },
+                 "evicted times round-trip to the day, never later")
+        r.equal(ScanCache.decodeState(Data("{\"v\":2,\(files)}".utf8))?.evicted.count ?? -1, 0,
+                "a version 2 file without the list loads with nothing evicted")
+        r.expect(!decodes("{\"v\":2,\(files),\"evicted\":[[1e999,\"x\"]]}"), "an infinite evicted day is rejected")
+        r.expect(!decodes("{\"v\":2,\(files),\"evicted\":[[-3,\"x\"]]}"), "a negative evicted day is rejected")
+        r.expect(!decodes("{\"v\":2,\(files),\"evicted\":[[20000.5,\"x\"]]}"), "a fractional evicted day is rejected")
+        r.expect(!decodes("{\"v\":2,\(files),\"evicted\":[[20000,7]]}"), "a non-string evicted id is rejected")
+        r.equal(ScanCache.decodeState(Data("{\"v\":2,\(files),\"evicted\":[[20000],[20001,\"a\",\"b\"]]}".utf8))?.evicted.count ?? -1, 2,
+                "an empty day group is tolerated")
+
+        // A transcript line from the year 3500 is dropped at parse time, so the cache stays loadable.
+        let year3500 = ISO8601.epochSeconds("3500-01-01T00:00:00Z") ?? 0
+        r.expect(year3500 > ScanCache.maxEventEpoch, "the fixture is past the cache's epoch range")
+        r.expect(parseLine(assistantLine(id: "far", ts: year3500, model: "claude-opus-5", output: 1)) == nil,
+                 "a year 3500 line yields no event")
+        r.expect(parseLine(assistantLine(id: "near", ts: ScanCache.maxEventEpoch - 86_400, model: "claude-opus-5", output: 1)) != nil,
+                 "a line just inside the range is still read")
+        guard let dir = makeTempDir() else { r.expect(false, "temp dir"); return }
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let now = Date().timeIntervalSince1970
+        writeLines(to: dir.appendingPathComponent("abababab-3500-3500-3500-350035003500.jsonl"), [
+            assistantLine(id: "ok_1", ts: now - 30, model: "claude-opus-5", output: 3),
+            assistantLine(id: "far_1", ts: year3500, model: "claude-opus-5", output: 4),
+        ])
+        let cold = TranscriptScanner(root: dir)
+        cold.fullScan(now: Date())
+        r.equal(cold.uniqueEventCount, 1, "the year 3500 line is not an event")
+        let cacheURL = dir.appendingPathComponent("scan-cache.json")
+        TranscriptScanner.writeCache(cold.cacheSnapshotForSaving(), to: cacheURL)
+        let warm = TranscriptScanner(root: dir)
+        r.expect(warm.loadCache(from: cacheURL), "a tree with a year 3500 line still gives a loadable cache")
+        r.equal(signature(warm), signature(cold), "... that matches the cold scan")
+        // The writer skips a row the reader would refuse, whatever put it in memory.
+        var poisoned = ScannedFile(path: "/tmp/p.jsonl", sessionID: "s")
+        poisoned.events = [makeEvent(id: "x", ts: year3500, model: "claude-opus-5", input: 1, output: 1, writeTotal: 0, write1h: 0, read: 0),
+                           makeEvent(id: "y", ts: now, model: "claude-opus-5", input: 1, output: 1, writeTotal: 0, write1h: 0, read: 0)]
+        let kept = ScanCache.decode(ScanCache.encode(files: [poisoned.path: poisoned]))?[poisoned.path]?.events.map { $0.id }
+        r.equal(kept ?? [], ["y"], "the writer drops an out-of-range row instead of poisoning the file")
+    }
+
+    // MARK: - Aged-out originals and evicted ids (A5)
+
+    /// Earliest sighting wins across the 10 day file window and across eviction. The original
+    /// transcript leaves the scan window a day before its responses reach the event TTL; a resumed
+    /// copy re-stamps one of them as a minute old. Dropping the original's events with the file
+    /// would hand the response to the copy and move it 9 days forward; forgetting an evicted id
+    /// would count a later copy of it as new usage.
+    static func agedOutOriginals(_ r: inout Runner) {
+        r.section("aged-out originals and evicted ids (A5)")
+        guard let dir = makeTempDir(), let support = makeTempDir() else { r.expect(false, "temp dir"); return }
+        defer {
+            try? FileManager.default.removeItem(at: dir)
+            try? FileManager.default.removeItem(at: support)
+        }
+        let day = 86_400.0
+        let t0 = Date().timeIntervalSince1970
+        let orig = dir.appendingPathComponent("f0f0f0f0-6666-6666-6666-666666666666.jsonl")
+        let copy = dir.appendingPathComponent("a0a0a0a0-7777-7777-7777-777777777777.jsonl")
+        writeLines(to: orig, [
+            assistantLine(id: "orig_only", ts: t0 - 9.3 * day, model: "claude-opus-5", output: 7),
+            assistantLine(id: "resp_R", ts: t0 - 9.2 * day, model: "claude-opus-5", output: 500),
+        ])
+        try? FileManager.default.setAttributes([.modificationDate: Date(timeIntervalSince1970: t0 - 9.1 * day)],
+                                               ofItemAtPath: orig.path)
+        writeLines(to: copy, [
+            assistantLine(id: "resp_R", ts: t0 - 60, model: "claude-opus-5", output: 500),
+            assistantLine(id: "copy_only", ts: t0 - 50, model: "claude-opus-5", output: 9),
+        ])
+        func event(_ s: TranscriptScanner, _ id: String) -> UsageEvent? { s.sortedEvents().first { $0.id == id } }
+        let origSession = "f0f0f0f0-6666-6666-6666-666666666666"
+
+        // Day 0: both files are in the window; R belongs to the original, 9.2 days ago.
+        let scanner = TranscriptScanner(root: dir)
+        let d0 = Date(timeIntervalSince1970: t0)
+        scanner.fullScan(now: d0)
+        scanner.evict(now: d0)
+        r.equal(event(scanner, "resp_R")?.sessionID ?? "", origSession, "day 0: R belongs to the original")
+        r.close(event(scanner, "resp_R")?.timestamp ?? 0, t0 - 9.2 * day, 1e-3, "day 0: R is 9.2 days old")
+
+        // Day 1: the original's mtime is 10.1 days old, so it is no longer scanned. R keeps its time.
+        let d1 = Date(timeIntervalSince1970: t0 + day)
+        r.equal(scanner.discover(now: d1).count, 1, "day 1: the original is outside the scan window")
+        scanner.fullScan(now: d1)
+        scanner.evict(now: d1)
+        r.equal(event(scanner, "resp_R")?.sessionID ?? "", origSession, "day 1: R still belongs to the original")
+        r.close(event(scanner, "resp_R")?.timestamp ?? 0, t0 - 9.2 * day, 1e-3,
+                "day 1: R keeps its original timestamp across the 10 day file boundary")
+        r.expect(event(scanner, "orig_only") != nil, "day 1: the original's own response is still counted")
+        r.expect(scanner.files[orig.path] != nil, "day 1: the aged-out original is retained, not re-read")
+
+        // The same through the cache: a warm start on day 1 agrees.
+        let cacheURL = support.appendingPathComponent("scan-cache.json")
+        TranscriptScanner.writeCache(scanner.cacheSnapshotForSaving(), to: cacheURL)
+        let warm1 = TranscriptScanner(root: dir)
+        r.expect(warm1.loadCache(from: cacheURL), "day 1 cache loads")
+        warm1.evict(now: d1)
+        warm1.fullScan(now: d1)
+        warm1.evict(now: d1)
+        r.equal(signature(warm1), signature(scanner), "day 1: a warm start keeps the retained original too")
+
+        // Day 2: R and orig_only pass the event TTL. They go from every file, the empty original is
+        // retired, and the ids are remembered.
+        let d2 = Date(timeIntervalSince1970: t0 + 2 * day)
+        scanner.fullScan(now: d2)
+        r.expect(scanner.evict(now: d2), "day 2: eviction drops the expired responses")
+        r.equal(Set(scanner.sortedEvents().map { $0.id }), ["copy_only"], "day 2: only the copy's own response is left")
+        r.expect(scanner.files[orig.path] == nil, "day 2: the emptied original leaves the scan state")
+        r.expect(!scanner.files.values.contains { $0.events.contains { $0.id == "resp_R" } }, "day 2: no file keeps a line of R")
+        r.close(scanner.tombstones["resp_R"] ?? 0, t0 - 9.2 * day, 1e-3, "day 2: R is remembered as evicted, at its own time")
+
+        // Route 2: a session resumed on day 2 copies R again, re-stamped. It is not new usage,
+        // whether it arrives through a rescan, a tail, or after a relaunch from the cache.
+        let copy2 = dir.appendingPathComponent("b0b0b0b0-8888-8888-8888-888888888888.jsonl")
+        writeLines(to: copy2, [
+            assistantLine(id: "resp_R", ts: t0 + 2 * day - 30, model: "claude-opus-5", output: 500),
+            assistantLine(id: "copy2_only", ts: t0 + 2 * day - 20, model: "claude-opus-5", output: 11),
+        ])
+        scanner.fullScan(now: d2)
+        r.equal(Set(scanner.sortedEvents().map { $0.id }), ["copy_only", "copy2_only"],
+                "an evicted id re-sighted in a new copy is not counted again (rescan)")
+        let copy3 = dir.appendingPathComponent("c0c0c0c0-9999-9999-9999-999999999999.jsonl")
+        writeLines(to: copy3, [assistantLine(id: "resp_R", ts: t0 + 2 * day - 10, model: "claude-opus-5", output: 500)])
+        _ = scanner.tail(paths: [copy3.path], now: d2)
+        r.expect(event(scanner, "resp_R") == nil, "... nor through a tail")
+        r.expect(!scanner.files.values.contains { $0.events.contains { $0.id == "resp_R" } }, "... and its lines are not stored")
+
+        TranscriptScanner.writeCache(scanner.cacheSnapshotForSaving(), to: cacheURL)
+        let state = (try? Data(contentsOf: cacheURL)).flatMap { ScanCache.decodeState($0) }
+        r.equal(Set(state?.evicted.keys.map { $0 } ?? []), ["resp_R", "orig_only"], "the evicted ids are persisted")
+        let warm2 = TranscriptScanner(root: dir)
+        r.expect(warm2.loadCache(from: cacheURL), "day 2 cache loads")
+        let copy4 = dir.appendingPathComponent("d0d0d0d0-1010-1010-1010-101010101010.jsonl")
+        writeLines(to: copy4, [assistantLine(id: "resp_R", ts: t0 + 2 * day - 5, model: "claude-opus-5", output: 500)])
+        warm2.fullScan(now: d2)
+        warm2.evict(now: d2)
+        r.expect(event(warm2, "resp_R") == nil, "... nor after a relaunch from the cache")
+        r.equal(signature(warm2), signature(scanner), "day 2: warm start == running scanner")
+
+        // Bounded: once the files have aged out and their events expired, the files are retired;
+        // an evicted id is forgotten `evictedMemory` after its own timestamp.
+        let late = Date(timeIntervalSince1970: t0 + 21 * day)
+        warm2.fullScan(now: late)
+        warm2.evict(now: late)
+        r.equal(warm2.uniqueEventCount, 0, "day 21: nothing is left to count")
+        r.equal(warm2.files.count, 0, "day 21: every aged-out file has been retired")
+        r.expect(warm2.tombstones["resp_R"] == nil, "day 21: R is forgotten \(Int(warm2.evictedMemory / day)) days after its timestamp")
+        r.expect(warm2.tombstones["copy2_only"] != nil, "day 21: a response evicted later is still remembered")
+        warm2.evict(now: Date(timeIntervalSince1970: t0 + 33 * day))
+        r.equal(warm2.tombstones.count, 0, "day 33: every evicted id is forgotten")
+    }
+
+    // MARK: - Offsets are persisted even when no event moved
+
+    /// Bytes that yield no usage (user lines, tool results) still move a file's offset, and the
+    /// cache must remember that, or every launch re-reads them.
+    static func offsetPersistence(_ r: inout Runner) {
+        r.section("offset-only advances are saved")
+        guard let dir = makeTempDir(), let support = makeTempDir() else { r.expect(false, "temp dir"); return }
+        defer {
+            try? FileManager.default.removeItem(at: dir)
+            try? FileManager.default.removeItem(at: support)
+        }
+        let file = dir.appendingPathComponent("e0e0e0e0-1212-1212-1212-121212121212.jsonl")
+        let now = Date().timeIntervalSince1970
+        writeLines(to: file, [assistantLine(id: "op1", ts: now - 20, model: "claude-opus-5", output: 1)])
+        let userLines = (0..<4).map { "{\"type\":\"user\",\"pad\":\"\(String(repeating: "u", count: 300))\",\"k\":\($0)}" }
+            .joined(separator: "\n") + "\n"
+
+        let scanner = TranscriptScanner(root: dir)
+        scanner.fullScan(now: Date())
+        let g0 = scanner.generation
+        var p0 = scanner.persistGeneration
+        append(to: file, userLines)
+        _ = scanner.tail(paths: [file.path], now: Date())
+        r.equal(Int(scanner.files[file.path]?.offset ?? 0), fileSize(file), "tail: the offset moves past the user lines")
+        r.equal(scanner.generation, g0, "tail: the event set did not change")
+        r.expect(scanner.persistGeneration != p0, "tail: the moved offset marks the cache dirty")
+        p0 = scanner.persistGeneration
+        append(to: file, userLines)
+        scanner.fullScan(now: Date())
+        r.expect(scanner.persistGeneration != p0, "rescan: the moved offset marks the cache dirty")
+        p0 = scanner.persistGeneration
+        scanner.fullScan(now: Date())
+        scanner.evict(now: Date())
+        r.equal(scanner.persistGeneration, p0, "an idle rescan and eviction leave the cache clean")
+
+        // The provider: after the first scan has been saved, user lines arrive; stop() must save
+        // the moved offset.
+        let tree = dir.appendingPathComponent("tree", isDirectory: true)
+        try? FileManager.default.createDirectory(at: tree, withIntermediateDirectories: true)
+        let live = tree.appendingPathComponent("e1e1e1e1-1313-1313-1313-131313131313.jsonl")
+        writeLines(to: live, [assistantLine(id: "op2", ts: now - 10, model: "claude-opus-5", output: 2)])
+        let cacheURL = support.appendingPathComponent("scan-cache.json")
+        let provider = LiveUsageProvider(root: tree, cacheURL: cacheURL,
+                                         pricingURL: support.appendingPathComponent("pricing.json"))
+        provider.isLiveEnabled = false
+        provider.start()
+        r.expect(waitUntil(6) { provider.diagnostics.firstScanComplete }, "the provider finishes its first scan")
+        append(to: live, userLines)
+        let size = UInt64(fileSize(live))
+        provider.refreshNow()
+        r.expect(waitUntil(6) { provider.diagnostics.bytesRead >= size }, "the provider reads the user lines")
+        provider.stop()
+        let saved = (try? Data(contentsOf: cacheURL)).flatMap { ScanCache.decode($0) }
+        r.equal(saved?[TokenampPaths.realPath(live.path)]?.offset ?? 0, size, "stop() saves an offset that moved without events")
     }
 
     // MARK: - Fast mode (amendment A5)

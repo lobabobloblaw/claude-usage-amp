@@ -11,6 +11,11 @@ enum ScanCache {
 
     /// 2 (amendment A5): every event row carries the fast-mode flag. A version 1 file cannot say
     /// which of its events were fast, so it is discarded and the next launch scans cold once.
+    ///
+    /// Still 2 with the optional `evicted` list (ids already counted and aged out, see
+    /// `TranscriptScanner.tombstones`) and unsigned inodes: a version 2 file without the list
+    /// decodes as "nothing evicted yet", and an older build skips the unknown key. A version bump
+    /// would buy nothing here and cost a cold scan, which knows less history than the warm cache.
     static let version = 2
 
     // MARK: - JSON writing helpers
@@ -20,6 +25,13 @@ enum ScanCache {
     }
 
     @inline(__always) private static func putInt(_ buf: inout [UInt8], _ v: Int) {
+        buf.append(contentsOf: String(v).utf8)
+    }
+
+    /// Sizes, offsets and inodes are written unsigned: `Int(UInt64)` traps from 2^63 up, which a
+    /// hashed 64-bit inode (some FUSE and cloud file systems) reaches. Below 2^63 the text is the
+    /// same as the signed writer produced, so older version 2 files read back unchanged.
+    @inline(__always) private static func putUInt(_ buf: inout [UInt8], _ v: UInt64) {
         buf.append(contentsOf: String(v).utf8)
     }
 
@@ -42,7 +54,7 @@ enum ScanCache {
 
     // MARK: - Encode
 
-    static func encode(files: [String: ScannedFile]) -> Data {
+    static func encode(files: [String: ScannedFile], evicted: [String: Double] = [:]) -> Data {
         var pool: [String: Int] = [:]
         var strings: [String] = []
         @inline(__always) func intern(_ s: String) -> Int {
@@ -62,13 +74,16 @@ enum ScanCache {
             if !firstFile { body.append(0x2C) }
             firstFile = false
             put(&body, "{\"p\":"); putQuoted(&body, f.path)
-            put(&body, ",\"sz\":"); putInt(&body, Int(f.size))
-            put(&body, ",\"mt\":"); put(&body, String(f.mtime))
-            put(&body, ",\"in\":"); putInt(&body, Int(f.inode))
-            put(&body, ",\"of\":"); putInt(&body, Int(f.offset))
+            put(&body, ",\"sz\":"); putUInt(&body, f.size)
+            put(&body, ",\"mt\":"); put(&body, String(f.mtime.isFinite ? f.mtime : 0))
+            put(&body, ",\"in\":"); putUInt(&body, f.inode)
+            put(&body, ",\"of\":"); putUInt(&body, f.offset)
             put(&body, ",\"e\":[")
             var firstEvent = true
             for e in f.events {
+                // Never write a row the reader rejects: that would discard the whole cache on every
+                // launch. The parser already refuses such timestamps; this keeps the writer honest.
+                guard isPlausibleEpoch(e.timestamp) else { continue }
                 if !firstEvent { body.append(0x2C) }
                 firstEvent = false
                 body.append(0x5B)
@@ -99,9 +114,26 @@ enum ScanCache {
         }
         put(&out, "],\"files\":[")
         out.append(contentsOf: body)
+        put(&out, "],\"evicted\":[")
+        // Grouped by UTC day, `[day, "id", "id", …]`: the time only decides when an id is
+        // forgotten, so a day is precise enough, and a heavy user has ~100 000 of these ids, which
+        // makes a timestamp per id a noticeable share of the file.
+        var byDay: [Int: [String]] = [:]
+        for (id, t) in evicted where isPlausibleEpoch(t) { byDay[Int(t / evictedDay), default: []].append(id) }
+        var firstGroup = true
+        for (day, ids) in byDay.sorted(by: { $0.key < $1.key }) {
+            if !firstGroup { out.append(0x2C) }
+            firstGroup = false
+            out.append(0x5B); putInt(&out, day)
+            for id in ids { out.append(0x2C); putQuoted(&out, id) }
+            out.append(0x5D)
+        }
         put(&out, "]}")
         return Data(out)
     }
+
+    /// Granularity of the evicted-id times on disk.
+    static let evictedDay: Double = 86_400
 
     // MARK: - Decode
 
@@ -112,17 +144,22 @@ enum ScanCache {
     /// cache is that a relaunch is instant, so the file is parsed directly instead. Anything that
     /// does not match the expected shape makes the whole cache be discarded, and the scanner falls
     /// back to a cold scan.
-    static func decode(_ data: Data) -> [String: ScannedFile]? {
-        data.withUnsafeBytes { raw -> [String: ScannedFile]? in
+    static func decode(_ data: Data) -> [String: ScannedFile]? { decodeState(data)?.files }
+
+    /// Everything the file holds: per-file state plus the evicted-id memory (empty when the file
+    /// predates it).
+    static func decodeState(_ data: Data) -> ScanCacheState? {
+        data.withUnsafeBytes { raw -> ScanCacheState? in
             var c = Reader(bytes: raw)
             return decodeRoot(&c)
         }
     }
 
-    private static func decodeRoot(_ c: inout Reader) -> [String: ScannedFile]? {
+    private static func decodeRoot(_ c: inout Reader) -> ScanCacheState? {
         guard c.openObject() else { return nil }
         var strings: [String] = []
         var out: [String: ScannedFile] = [:]
+        var evicted: [String: Double] = [:]
         var sawVersion = false
         var sawFiles = false
 
@@ -148,13 +185,26 @@ enum ScanCache {
                     if !c.commaOrEnd() { return nil }
                 }
                 sawFiles = true
+            case "evicted":
+                guard c.openArray() else { return nil }
+                while !c.closeArrayIfPresent() {
+                    guard c.openArray(), let day = c.number(), day == day.rounded(.down) else { return nil }
+                    let t = day * evictedDay
+                    guard isPlausibleEpoch(t) else { return nil }
+                    while !c.closeArrayIfPresent() {
+                        guard c.comma(), let id = c.string() else { return nil }
+                        evicted[id] = t
+                    }
+                    if !c.commaOrEnd() { return nil }
+                }
             default:
                 guard c.skipValue() else { return nil }
             }
             if !c.commaOrEnd() { return nil }
         }
-        guard sawVersion, sawFiles else { return nil }
-        return out
+        // `nextKey` also ends the loop on a structural error; only a closing brace is success.
+        guard !c.failed, sawVersion, sawFiles else { return nil }
+        return ScanCacheState(files: out, evicted: evicted)
     }
 
     /// `UInt64(Double)` and `Int(Double)` **trap** on infinity, on NaN and on anything outside the
@@ -174,8 +224,13 @@ enum ScanCache {
     }
 
     /// Epoch seconds a cached event is allowed to carry: 1970 … year 3000. Anything else means the
-    /// file is not one of ours.
+    /// file is not one of ours. The transcript parser applies the same range to every line, so a
+    /// stray timestamp in a transcript is dropped there instead of poisoning the cache.
     static let maxEventEpoch: Double = 32_503_680_000
+
+    @inline(__always) static func isPlausibleEpoch(_ t: Double) -> Bool {
+        t.isFinite && t >= 0 && t <= maxEventEpoch
+    }
 
     private static func decodeFile(_ c: inout Reader, strings: [String]) -> ScannedFile? {
         guard c.openObject() else { return nil }
@@ -190,7 +245,9 @@ enum ScanCache {
                 f.sessionID = TranscriptScanner.sessionID(forPath: p)
             case "sz": guard let v = c.number() else { return nil }; f.size = clampedUInt64(v)
             case "mt": guard let v = c.number() else { return nil }; f.mtime = v.isFinite ? v : 0
-            case "in": guard let v = c.number() else { return nil }; f.inode = clampedUInt64(v)
+            case "in":
+                guard let v = c.numberToken() else { return nil }
+                f.inode = v.exact ?? clampedUInt64(v.value)
             case "of": guard let v = c.number() else { return nil }; f.offset = clampedUInt64(v)
             case "e":
                 guard c.openArray() else { return nil }
@@ -210,7 +267,7 @@ enum ScanCache {
                     guard fast == 0 || fast == 1 else { return nil }
                     let seconds = ms / 1000
                     // A timestamp outside the plausible epoch range means the row is not ours.
-                    guard seconds.isFinite, seconds >= 0, seconds <= maxEventEpoch else { return nil }
+                    guard isPlausibleEpoch(seconds) else { return nil }
                     // Token counts are summed with trapping `+`, so a nonsense magnitude here would
                     // be an overflow crash later; reject the file instead.
                     for n in [input, output, writeTotal, write1h, read]
@@ -233,6 +290,7 @@ enum ScanCache {
             }
             if !c.commaOrEnd() { return nil }
         }
+        guard !c.failed else { return nil }
         return f.path.isEmpty ? nil : f
     }
 
@@ -337,7 +395,19 @@ enum ScanCache {
             return v
         }
 
-        mutating func number() -> Double? {
+        mutating func number() -> Double? { numberToken()?.value }
+
+        /// Exponent digits stop accumulating here. Anything past ±400 is already infinity or zero
+        /// in a Double, so the cap changes no result; without it a 19-digit exponent is an `Int`
+        /// overflow, which traps.
+        static let exponentCap = 99_999
+
+        /// One JSON number. `exact` is the value as an unsigned 64-bit integer when the text is a
+        /// plain non-negative integer that fits (no sign, fraction or exponent) — the only way a
+        /// hashed 64-bit inode survives the trip, since a Double keeps 53 bits. A value outside
+        /// Double's range (a huge exponent, hundreds of digits, `0e999` = NaN) fails the whole
+        /// read: our writer never produces one, so the file is not ours.
+        mutating func numberToken() -> (value: Double, exact: UInt64?)? {
             guard !failed else { return nil }
             skipSpace()
             let start = i
@@ -345,13 +415,22 @@ enum ScanCache {
             if i < bytes.count, bytes[i] == 0x2D { negative = true; i += 1 }
             var value = 0.0
             var digits = 0
+            var exact: UInt64? = 0
             while i < bytes.count, bytes[i] >= 0x30, bytes[i] <= 0x39 {
-                value = value * 10 + Double(bytes[i] - 0x30)
+                let d = bytes[i] - 0x30
+                value = value * 10 + Double(d)
+                if let e = exact {
+                    let (m, o1) = e.multipliedReportingOverflow(by: 10)
+                    let (s, o2) = m.addingReportingOverflow(UInt64(d))
+                    exact = (o1 || o2) ? nil : s
+                }
                 digits += 1
                 i += 1
             }
             guard digits > 0 else { i = start; failed = true; return nil }
+            var integral = !negative
             if i < bytes.count, bytes[i] == 0x2E {
+                integral = false
                 i += 1
                 var scale = 0.1
                 while i < bytes.count, bytes[i] >= 0x30, bytes[i] <= 0x39 {
@@ -361,6 +440,7 @@ enum ScanCache {
                 }
             }
             if i < bytes.count, bytes[i] == 0x65 || bytes[i] == 0x45 {
+                integral = false
                 i += 1
                 var expNegative = false
                 if i < bytes.count, bytes[i] == 0x2B || bytes[i] == 0x2D {
@@ -369,12 +449,14 @@ enum ScanCache {
                 }
                 var exp = 0
                 while i < bytes.count, bytes[i] >= 0x30, bytes[i] <= 0x39 {
-                    exp = exp * 10 + Int(bytes[i] - 0x30)
+                    if exp <= Reader.exponentCap { exp = exp * 10 + Int(bytes[i] - 0x30) }
                     i += 1
                 }
                 value *= pow(10, Double(expNegative ? -exp : exp))
             }
-            return negative ? -value : value
+            let signed = negative ? -value : value
+            guard signed.isFinite else { failed = true; return nil }
+            return (signed, integral ? exact : nil)
         }
 
         /// Skip any value, so a cache written by a newer build with extra keys still loads.
@@ -402,4 +484,11 @@ enum ScanCache {
             }
         }
     }
+}
+
+/// What the scan cache file holds.
+struct ScanCacheState {
+    var files: [String: ScannedFile]
+    /// `message.id` -> timestamp (epoch seconds) of responses already counted and evicted.
+    var evicted: [String: Double]
 }

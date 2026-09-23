@@ -148,8 +148,9 @@ public final class LiveUsageProvider: UsageProvider {
     private let liveLock = NSLock()
     private var pendingOutcome: LiveFetchOutcome?
 
-    /// The scanner's event-set generation at the last successful cache write; the cache is dirty
-    /// exactly when this no longer matches.
+    /// The scanner's `persistGeneration` at the last cache write; the cache is dirty exactly when
+    /// this no longer matches. Not the event-set `generation`: an offset that moves past lines with
+    /// no usage in them must be saved too, or every launch re-reads those bytes.
     private var lastSavedGeneration: UInt64 = .max
     private var lastCacheSaveAt = Date.distantPast
     private var tickCount = 0
@@ -358,11 +359,11 @@ public final class LiveUsageProvider: UsageProvider {
     /// copy itself is free) and encoded on `ioQueue`, because encoding tens of thousands of events
     /// on the scan queue would show up as a stalled clock in the UI.
     private func saveCacheIfNeeded(force: Bool) {
-        guard scanner.generation != lastSavedGeneration else { return }
+        guard scanner.persistGeneration != lastSavedGeneration else { return }
         let now = Date()
         guard force || now.timeIntervalSince(lastCacheSaveAt) >= 10 else { return }
         lastCacheSaveAt = now
-        lastSavedGeneration = scanner.generation
+        lastSavedGeneration = scanner.persistGeneration
         let copy = scanner.cacheSnapshotForSaving()
         let url = cacheURL
         ioQueue.async { TranscriptScanner.writeCache(copy, to: url) }
@@ -380,8 +381,8 @@ public final class LiveUsageProvider: UsageProvider {
     /// while still guaranteeing the cache is on disk before `stop()` returns. The wait is bounded:
     /// a warm start is a nicety, a frozen Quit is not.
     private func flushCacheNow() {
-        if scanner.generation != lastSavedGeneration {
-            lastSavedGeneration = scanner.generation
+        if scanner.persistGeneration != lastSavedGeneration {
+            lastSavedGeneration = scanner.persistGeneration
             lastCacheSaveAt = Date()
             let copy = scanner.cacheSnapshotForSaving()
             let url = cacheURL
