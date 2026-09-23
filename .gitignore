@@ -25,3 +25,6 @@ assets/icon/preview_sizes.png
 # skin's swatches.py / crop.py / specimen.py.
 skins/*/work/
 skins/*/crops/
+
+# agent worktrees
+.claude/worktrees/

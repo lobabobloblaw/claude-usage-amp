@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Tokenamp is a native Swift/AppKit macOS app that shows Claude plan usage as a Winamp 2.x player
 with real classic `.wsz` skin support. `docs/SPEC.md` is the contract for everything; its
-amendments (A1–A6) at the top override older text and older code. Read the relevant SPEC section
+amendments (A1–A9) at the top override older text and older code. Read the relevant SPEC section
 before changing behaviour.
 
 ## Toolchain
@@ -29,12 +29,16 @@ build/Tokenamp.app/Contents/MacOS/Tokenamp --snapshot <dir> --demo --skin skins/
 #   --state pressed renders the alternate sprites; --at <unix-seconds> moves the demo clock
 
 # Data layer without UI
-swift run usage-dump --once | --json | --no-live
+swift run usage-dump --once | --json | --no-live      # --no-live never touches the API or credential
+swift run usage-dump --watch 20                        # re-print every N seconds
 
 # Skins
 python3 skins/build.py --all              # every skins/<name>/theme.py -> skins/dist/<Name>.wsz
 python3 skins/build.py bookcloth          # one skin; writes out/, preview/, then validates
+python3 skins/build.py bookcloth --no-preview   # faster iteration (also --no-validate)
 cd skins && python3 -m skinkit.validate dist/Base.wsz
+python3 scripts/make_debug_skin.py        # flat-colour labelled DEBUG skin from sprites.json, for
+                                          #   spotting misplaced/mis-cropped sprites in a snapshot
 
 # Generated code and docs images
 python3 scripts/gen_sprites_swift.py [--check]   # sprites.json -> Sources/TokenampKit/Skin/Sprites.generated.swift
@@ -80,7 +84,8 @@ either language; edit the JSON, then re-run `gen_sprites_swift.py`. A skin is a 
 `skins/<name>/theme.py` that paints widgets in *window* coordinates; `skinkit/builder.py` cuts them
 into sheets and bakes normal states over a shared underlay (see `skins/skinkit/README.md`, the
 artist's manual). Unoverridden painters fall back to Base, and Base is also the app's runtime
-fallback for any sheet a third-party skin lacks.
+fallback for any sheet a third-party skin lacks. Before changing a skin's art, read
+`skins/ART_DIRECTION.md` (shared bar for all skins) and that skin's `skins/<name>/BRIEF.md`.
 
 ## Rules that are easy to break
 
